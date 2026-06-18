@@ -12,6 +12,30 @@ This demo is the FP4D manual segmentation workflow built on Point-SAM. It can:
 
 The app is a single-user Flask + Three.js tool. Run it locally, open it in a browser, label data, and export the results next to the dataset you selected.
 
+## Quick start (new user)
+
+```bash
+git clone https://github.com/LThannen/Point-SAM.git
+cd Point-SAM
+
+# 1. checkpoint (~1.19 GB, not in the repo): see the Checkpoint section below
+pip install huggingface_hub
+huggingface-cli download yuchen0187/Point-SAM model.safetensors --local-dir pretrained
+
+# 2. environment
+python -m venv venv
+venv/bin/pip install flask flask-cors hydra-core omegaconf safetensors laspy scipy matplotlib numpy timm
+# install torch for your CUDA/driver per https://pytorch.org
+
+# 3. run, pointing at the unzipped bonndata FieldPheno4D download
+PYTHONPATH=$PWD venv/bin/python demo/app.py --port 5056 \
+  --dataset-root /path/to/doi-10.60507-fk2-hyi2ds/
+```
+
+Open `http://localhost:5056`, pick a plant from the Plot dropdown, and start
+labelling. Everything below is reference detail. The local `/home/lukas/...`
+paths in later sections are the author's setup; substitute your own.
+
 ## Repository Layout
 
 Important paths:
@@ -120,16 +144,30 @@ The Point-SAM Python package must be importable. The launch commands below set `
 
 ## Checkpoint
 
-The default checkpoint path is:
+The Point-SAM checkpoint (ViT-L, ~1.19 GB) is NOT included in this repository
+(it is too large for git). Download it from the upstream Point-SAM release on
+HuggingFace and place it at `pretrained/model.safetensors`:
 
 ```text
-/home/lukas/pointr/Point-SAM/pretrained/model.safetensors
+https://huggingface.co/yuchen0187/Point-SAM/tree/main
 ```
 
-Verify it exists:
+```bash
+cd /path/to/Point-SAM
+mkdir -p pretrained
+# download model.safetensors from the HuggingFace page above, then:
+#   mv ~/Downloads/model.safetensors pretrained/model.safetensors
+# or with the huggingface_hub CLI:
+pip install huggingface_hub
+huggingface-cli download yuchen0187/Point-SAM model.safetensors \
+  --local-dir pretrained
+```
+
+The app defaults to `pretrained/model.safetensors` (resolved relative to the
+repo). Verify it exists:
 
 ```bash
-ls -lh /home/lukas/pointr/Point-SAM/pretrained/model.safetensors
+ls -lh pretrained/model.safetensors
 ```
 
 If you keep the checkpoint somewhere else, pass it explicitly:
