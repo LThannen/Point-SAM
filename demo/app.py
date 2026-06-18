@@ -333,8 +333,12 @@ def _row_mask(x, y):
 
 def _load_row_sample(date, n_target):
     raw_path = _raw_path(date)
+    cap = int(n_target or 0)
     xs, ys, zs, hs = [], [], [], []
+    sample_keys = None
+    sample_x = sample_y = sample_z = sample_h = None
     row_count = 0
+    rng = np.random.default_rng(0)
 
     with laspy.open(raw_path) as fh:
         extra = set(fh.header.point_format.extra_dimension_names)
@@ -348,18 +352,43 @@ def _load_row_sample(date, n_target):
                 continue
             z = np.asarray(pts.z)
             h = np.asarray(pts[hname]).astype(np.float64) if hname else z - z.min()
-            xs.append(x[m])
-            ys.append(y[m])
-            zs.append(z[m])
-            hs.append(h[m])
+            cx, cy, cz, ch = x[m], y[m], z[m], h[m]
+            if cap <= 0:
+                xs.append(cx)
+                ys.append(cy)
+                zs.append(cz)
+                hs.append(ch)
+                continue
 
-    if not xs:
+            keys = rng.random(len(cx))
+            if sample_keys is None:
+                keep = np.arange(len(cx)) if len(cx) <= cap else np.argpartition(keys, -cap)[-cap:]
+                sample_keys = keys[keep]
+                sample_x, sample_y, sample_z, sample_h = cx[keep], cy[keep], cz[keep], ch[keep]
+                continue
+
+            keys = np.concatenate([sample_keys, keys])
+            sample_x = np.concatenate([sample_x, cx])
+            sample_y = np.concatenate([sample_y, cy])
+            sample_z = np.concatenate([sample_z, cz])
+            sample_h = np.concatenate([sample_h, ch])
+            if len(keys) > cap:
+                keep = np.argpartition(keys, -cap)[-cap:]
+                sample_keys = keys[keep]
+                sample_x, sample_y, sample_z, sample_h = sample_x[keep], sample_y[keep], sample_z[keep], sample_h[keep]
+            else:
+                sample_keys = keys
+
+    if cap > 0 and sample_keys is not None:
+        order = np.argsort(sample_keys)
+        x, y, z, h = sample_x[order], sample_y[order], sample_z[order], sample_h[order]
+    elif xs:
+        x = np.concatenate(xs)
+        y = np.concatenate(ys)
+        z = np.concatenate(zs)
+        h = np.concatenate(hs)
+    else:
         raise RuntimeError(f"No row points found for {date}")
-
-    x = np.concatenate(xs)
-    y = np.concatenate(ys)
-    z = np.concatenate(zs)
-    h = np.concatenate(hs)
 
     xyz_utm = np.column_stack((x, y, z)).astype(np.float64)
     hn = np.clip((h - h.min()) / (np.ptp(h) + 1e-9), 0, 1)

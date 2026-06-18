@@ -178,6 +178,10 @@ For normal work, use the default cap (`400000`) or tune it:
 
 The full cloud is still rendered and exported. `--model-cap` only limits the Point-SAM encoder sample; masks are propagated back to full resolution.
 
+For raw LAS ground-removal mode, the browser displays a sampled working cloud controlled by `Raw display points` in the UI, or by `--n`/`POINTSAM_N` on startup. This is intentional for very large raw plots such as Plot07, where a single date can contain tens of millions of points.
+
+If `Export full-res` is enabled, row labels are propagated back to the raw LAS by nearest neighbour during export. The backend builds a KD-tree from the sampled working cloud in original UTM coordinates, streams the full raw LAS in chunks, and gives each full-resolution point the label of its nearest sampled point. This keeps browser labelling responsive while still producing a full-resolution LAS. Use a larger raw display sample when boundary precision matters.
+
 ## Command-Line Flags
 
 Main flags:
@@ -192,6 +196,7 @@ Main flags:
 --port PORT               Flask bind port.
 --date YYMMDD             Initial date.
 --export-fullres          Default row export includes full-res propagated LAS.
+--n N                     Raw row display/sample points. Default: POINTSAM_N or 300000.
 ```
 
 `--dataset-root` accepts either a staged dataset root or a direct raw `PlotXX` folder. If you pass the parent of several raw plot folders, also pass `--dataset-plot PlotXX`.
@@ -412,6 +417,28 @@ POINTSAM_MODEL_CAP=200000
 
 The app also retries automatically by halving the cap if encoder OOM occurs.
 
+### Raw Plot07 or another raw plot is too large to load
+
+Raw LAS dates can contain tens of millions of points. The app now loads only the sampled working cloud for browser labelling:
+
+```bash
+--n 300000
+```
+
+or:
+
+```bash
+POINTSAM_N=300000
+```
+
+In the UI this is the `Raw display points` selector. The server log should show both numbers:
+
+```text
+loaded Plot07 230711: rendered 120,000/38,492,213 points ...
+```
+
+The first number is the working cloud sent to the browser. The second number is the full raw row point count.
+
 ### Dataset opens but raw row mode fails
 
 Raw row mode requires:
@@ -461,5 +488,6 @@ PY
 
 - The app is intentionally single-user and runs Flask with `threaded=False`; do not use one server instance for multiple simultaneous labellers.
 - `--model-cap` does not downsample exports. It only controls the model encoder input.
+- `--n` / `Raw display points` controls the sampled working cloud for raw LAS ground-removal mode.
 - Point coordinates sent by browser clicks are full-resolution normalized coordinates. No index remapping is needed for prompts.
 - If a dataset has `row_frame.json`, row raw mode applies the row crop. If not, raw mode loads all raw points for that date.
