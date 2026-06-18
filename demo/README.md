@@ -46,6 +46,17 @@ fp4d_pointsam_dataset/
     PlotXX/plant_NN/handlabel_NN_<date>_qc.png
 ```
 
+You can also point `--dataset-root` or the UI dataset path directly at a raw FP4D plot folder:
+
+```text
+/path/to/doi-10.60507-fk2-hyi2ds/Plot07/
+  230516.las
+  230525.las
+  ...
+```
+
+In that case the app derives `plot=Plot07`, discovers dates from the `.las` files, and writes new labels under the selected `Plot07/` folder.
+
 ## Install
 
 Use the existing Point-SAM environment when available:
@@ -183,6 +194,8 @@ Main flags:
 --export-fullres          Default row export includes full-res propagated LAS.
 ```
 
+`--dataset-root` accepts either a staged dataset root or a direct raw `PlotXX` folder. If you pass the parent of several raw plot folders, also pass `--dataset-plot PlotXX`.
+
 Advanced row-crop flags:
 
 ```text
@@ -213,8 +226,8 @@ Writes go into the selected dataset root:
 Use the `Mode` dropdown:
 
 ```text
-Full row 2-class       Raw row mode: plant vs ground.
-Row plant-separation   Ground-removed row vegetation: assign plant IDs.
+Ground removal        Raw row mode: plant vs ground.
+Plant separation      Ground-removed row vegetation: assign plant IDs.
 Per-plant leaf/stem    Isolated plant mode: stem vs leaf IDs.
 ```
 
@@ -266,8 +279,8 @@ Click `Export`.
 Outputs depend on mode:
 
 ```text
-Full row 2-class       2-class NPY/LAS labels.
-Row plant-separation   plant_NN_<date>.npy, plant_NN_<date>_utm.npy, plantsep QC.
+Ground removal        2-class NPY/LAS labels.
+Plant separation      plant_NN_<date>.npy, plant_NN_<date>_utm.npy, plantsep QC.
 Per-plant leaf/stem    handlabel_NN_<date>.npy, gt_otype, gt_leafid, QC PNG, manifest row.
 ```
 
@@ -407,7 +420,7 @@ Raw row mode requires:
 raw/PlotXX/<date>.las
 ```
 
-If your staged dataset only has `stage1_ground_removed`, use `Row plant-separation` or let the initial load open the staged vegetation cloud.
+If your staged dataset only has `stage1_ground_removed`, use `Plant separation` or let the initial load open the staged vegetation cloud.
 
 ### `/datasets` is slow or shows too many folders
 

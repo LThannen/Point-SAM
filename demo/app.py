@@ -115,6 +115,12 @@ def _dates_from_plants(plant_root: Path) -> set[str]:
     return dates
 
 
+def _dates_from_raw(raw_dir: Path | None) -> set[str]:
+    if not raw_dir or not raw_dir.exists():
+        return set()
+    return {p.stem for p in raw_dir.glob("*.las") if p.stem.isdigit()}
+
+
 def _plants_from_root(plant_root: Path) -> tuple[str, ...]:
     plants = set(range(BASE_PLANT_COUNT))
     if plant_root.exists():
@@ -150,6 +156,8 @@ def _read_row_frame(root: Path) -> dict | None:
 def _choose_plot(root: Path, requested: str | None) -> str:
     if requested:
         return requested
+    if root.name.startswith("Plot") and root.name[4:].isdigit():
+        return root.name
     candidates = []
     for stage in ("stage1_ground_removed", "stage2_plants_isolated", "stage3_leafstem_labeled"):
         stage_dir = root / stage
@@ -173,15 +181,27 @@ def _resolve_dataset(root: Path, plot: str | None = None) -> Dataset:
         leafstem_root = root / "stage3_leafstem_labeled" / plot
         label_root = stage1_dir
         raw_dir = root / "raw" / plot if (root / "raw" / plot).exists() else None
+    elif root.name == plot and any(root.glob("*.las")):
+        stage1_dir = root / "stage1_ground_removed"
+        plant_root = root / "stage2_plants_isolated"
+        leafstem_root = root / "stage3_leafstem_labeled"
+        label_root = root / "labels"
+        raw_dir = root
     else:
         stage1_dir = root / "labels" if (root / "labels").exists() else None
-        plant_root = root / plot if (root / plot / "base_centres.npy").exists() else root
-        leafstem_root = plant_root
-        label_root = LEGACY_LABEL_ROOT if root == LEGACY_PLANT_ROOT else root / "labels"
-        raw_dir = LEGACY_RAW_ROOT if root == LEGACY_PLANT_ROOT else root / "raw" / plot
-        if not raw_dir.exists():
-            raw_dir = None
-    dates = sorted(_dates_from_stage1(stage1_dir) | _dates_from_plants(plant_root))
+        if (root / plot).exists() and any((root / plot).glob("*.las")):
+            raw_dir = root / plot
+            plant_root = root / plot / "stage2_plants_isolated"
+            leafstem_root = root / plot / "stage3_leafstem_labeled"
+            label_root = root / plot / "labels"
+        else:
+            raw_dir = LEGACY_RAW_ROOT if root == LEGACY_PLANT_ROOT else root / "raw" / plot
+            plant_root = root / plot if (root / plot / "base_centres.npy").exists() else root
+            leafstem_root = plant_root
+            label_root = LEGACY_LABEL_ROOT if root == LEGACY_PLANT_ROOT else root / "labels"
+            if not raw_dir.exists():
+                raw_dir = None
+    dates = sorted(_dates_from_stage1(stage1_dir) | _dates_from_plants(plant_root) | _dates_from_raw(raw_dir))
     epsg_candidates = []
     if stage1_dir and stage1_dir.exists():
         epsg_candidates.extend(sorted(stage1_dir.glob("*.npy"))[:3])
