@@ -403,6 +403,14 @@ def _normalize_xyz(xyz_utm):
     return xyz_norm, shift, float(scale)
 
 
+def _sample_indices(n, n_target, seed=0):
+    n_target = int(n_target or 0)
+    if n_target <= 0 or n <= n_target:
+        return np.arange(n, dtype=np.int64)
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(n, n_target, replace=False)).astype(np.int64)
+
+
 def _encode_pointcloud(pc_xyz, pc_features):
     with torch.no_grad():
         pc_embeddings, patches = model.pc_encoder(pc_xyz, pc_features)
@@ -730,7 +738,8 @@ def _load_saved_separation(date, n):
     return plant_id, str(path)
 
 
-def _load_row_veg(date, seed_auto=True):
+def _load_row_veg(date, seed_auto=True, n_target=None):
+    n_target = int(args.n if n_target is None else n_target)
     path = _row_veg_path(date)
     o = np.load(path, allow_pickle=True).item()
     if "label" in o:
@@ -744,6 +753,10 @@ def _load_row_veg(date, seed_auto=True):
         xyz_local = np.asarray(o["xyz_local"], dtype=np.float32)
     else:
         xyz_local = _utm_to_separator_cm(xyz_utm)
+    full_count = len(xyz_utm)
+    sel = _sample_indices(full_count, n_target)
+    xyz_utm = xyz_utm[sel]
+    xyz_local = xyz_local[sel]
     height = (xyz_local[:, 2] - xyz_local[:, 2].min()).astype(np.float32) / 100.0
     plant_id, loaded_from = _load_saved_separation(date, len(xyz_utm))
     if plant_id is None:
@@ -756,8 +769,8 @@ def _load_row_veg(date, seed_auto=True):
         xyz_utm,
         height,
         display_rgb,
-        len(xyz_utm),
-        len(xyz_utm),
+        full_count,
+        n_target,
         mode="separation",
         xyz_local=xyz_local,
         display_xyz=xyz_local,
@@ -880,7 +893,8 @@ def _load_handlabel_geometry(hand_path):
     return xl, xu, ot, lf
 
 
-def _load_plant(plant, date):
+def _load_plant(plant, date, n_target=None):
+    n_target = int(args.n if n_target is None else n_target)
     pdir, local_path, utm_path, hand_path = _plant_paths(plant, date)
     if not local_path.exists():
         raise FileNotFoundError(local_path)
@@ -898,6 +912,12 @@ def _load_plant(plant, date):
         if xyz_utm.shape != xyz_local.shape:
             raise RuntimeError(f"{utm_path} shape {xyz_utm.shape} does not match {local_path} {xyz_local.shape}")
         otype, leafid, loaded_from = _load_saved_leafstem(plant, date, len(xyz_local))
+    full_count = len(xyz_local)
+    sel = _sample_indices(full_count, n_target)
+    xyz_local = xyz_local[sel]
+    xyz_utm = xyz_utm[sel]
+    otype = otype[sel]
+    leafid = leafid[sel]
     display_rgb = _plant_display_rgb(otype, leafid)
     height = (xyz_local[:, 2] - float(np.min(xyz_local[:, 2]))).astype(np.float32) / 100.0
     _set_active_cloud(
@@ -906,8 +926,8 @@ def _load_plant(plant, date):
         xyz_utm,
         height,
         display_rgb,
-        len(xyz_local),
-        len(xyz_local),
+        full_count,
+        n_target,
         mode="plant",
         plant=f"{int(plant):02d}",
         xyz_local=xyz_local,
@@ -1527,8 +1547,8 @@ def pointcloud_server(path):
 def load_date_server(date):
     data = request.get_json(silent=True) or {}
     n_target = int(data.get("n", state["n_target"] or args.n))
-    if n_target < 2048:
-        return jsonify({"error": "density must be at least 2048 points"}), 400
+    if 0 < n_target < 2048:
+        return jsonify({"error": "density must be 0 for full resolution or at least 2048 points"}), 400
     try:
         _load_date(date, n_target)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -1541,8 +1561,11 @@ def load_plant_server():
     data = request.get_json(silent=True) or {}
     plant = data.get("plant_id", data.get("plant", "06"))
     date = data.get("date", "230619")
+    n_target = int(data.get("n", state["n_target"] or args.n))
+    if 0 < n_target < 2048:
+        return jsonify({"error": "density must be 0 for full resolution or at least 2048 points"}), 400
     try:
-        loaded_from = _load_plant(plant, date)
+        loaded_from = _load_plant(plant, date, n_target=n_target)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc), "plants": list(_available_plants()), "dates": list(active_dataset.dates)}), 400
     payload = _cloud_payload()
@@ -1555,8 +1578,11 @@ def load_row_veg_server():
     data = request.get_json(silent=True) or {}
     date = data.get("date", "230619")
     seed_auto = bool(data.get("seed_auto", True))
+    n_target = int(data.get("n", state["n_target"] or args.n))
+    if 0 < n_target < 2048:
+        return jsonify({"error": "density must be 0 for full resolution or at least 2048 points"}), 400
     try:
-        loaded_from = _load_row_veg(date, seed_auto=seed_auto)
+        loaded_from = _load_row_veg(date, seed_auto=seed_auto, n_target=n_target)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc), "dates": list(active_dataset.dates)}), 400
     payload = _cloud_payload()
@@ -1754,7 +1780,7 @@ def delete_indices():
 def reset_crop():
     _ensure_loaded()
     if state["mode"] == "plant":
-        _load_plant(state["plant"], state["date"])
+        _load_plant(state["plant"], state["date"], n_target=state["n_target"])
     else:
         _load_date(state["date"], state["n_target"])
     return jsonify({"status": "crop_reset", **_cloud_payload()})

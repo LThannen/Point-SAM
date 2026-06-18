@@ -120,13 +120,14 @@ function updateCounts(meta) {
   appMode = meta.mode || appMode;
   updateModeVisibility();
   const crop = meta.crop_parent_count ? ` cropped from ${meta.crop_parent_count.toLocaleString()}` : "";
+  const fullText = meta.row_count && meta.row_count !== meta.n ? ` of ${meta.row_count.toLocaleString()} full points` : "";
   if (appMode === "separation") {
     document.getElementById("counts").textContent =
       `unassigned ${meta.counts.unassigned.toLocaleString()} | ` +
       `assigned ${meta.counts.assigned.toLocaleString()} | ` +
       `plants ${meta.counts.plants}`;
     document.getElementById("sample-info").textContent =
-      `${meta.date} row vegetation: ${meta.n.toLocaleString()} points`;
+      `${meta.date} row vegetation: ${meta.n.toLocaleString()} points${fullText}`;
     const newPlantBtn = document.getElementById("target-new-plant");
     if (newPlantBtn && Number.isInteger(meta.next_plant_id)) {
       newPlantBtn.textContent = `New plant ${meta.next_plant_id}`;
@@ -138,7 +139,7 @@ function updateCounts(meta) {
       `stem ${meta.counts.stem.toLocaleString()} | ` +
       `leaf ${meta.counts.leaf.toLocaleString()}`;
     document.getElementById("sample-info").textContent =
-      `${meta.date} plant ${meta.plant}: ${meta.n.toLocaleString()} points`;
+      `${meta.date} plant ${meta.plant}: ${meta.n.toLocaleString()} points${fullText}`;
     renderLeafList(meta.leaves || []);
   } else {
     document.getElementById("counts").textContent =
@@ -886,7 +887,8 @@ async function exportLabels() {
 async function loadDate() {
   const date = document.getElementById("date-select").value;
   const n = Number(document.getElementById("density-select").value);
-  setStatus(`Loading ${date} at ${n.toLocaleString()} points...`);
+  const densityText = n > 0 ? `${n.toLocaleString()} points` : "full resolution";
+  setStatus(`Loading ${date} at ${densityText}...`);
   const response = await fetch(`/load_date/${date}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -912,11 +914,13 @@ async function loadDate() {
 async function loadRowVeg() {
   const date = document.getElementById("date-select").value;
   const seedAuto = document.getElementById("seed-auto-separation").checked;
-  setStatus(`Loading row vegetation ${date}${seedAuto ? " seeded from auto" : ""}...`);
+  const n = Number(document.getElementById("density-select").value);
+  const densityText = n > 0 ? `${n.toLocaleString()} points` : "full resolution";
+  setStatus(`Loading row vegetation ${date} at ${densityText}${seedAuto ? " seeded from auto" : ""}...`);
   const response = await fetch("/load_row_veg", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ date, seed_auto: seedAuto }),
+    body: JSON.stringify({ date, seed_auto: seedAuto, n }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -940,11 +944,13 @@ async function loadRowVeg() {
 async function loadPlant() {
   const date = document.getElementById("date-select").value;
   const plant = document.getElementById("plant-select").value;
-  setStatus(`Loading plant ${plant} @ ${date}...`);
+  const n = Number(document.getElementById("density-select").value);
+  const densityText = n > 0 ? `${n.toLocaleString()} points` : "full resolution";
+  setStatus(`Loading plant ${plant} @ ${date} at ${densityText}...`);
   const response = await fetch("/load_plant", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ plant_id: plant, date }),
+    body: JSON.stringify({ plant_id: plant, date, n }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -1039,7 +1045,7 @@ function bindButtons(initialData) {
   adoptDatasetMeta(initialData, initialData.date);
   document.getElementById("density-select").value = String(initialData.n_target || initialData.n);
   dateSelect.onchange = () => appMode === "plant" ? loadPlant() : appMode === "separation" ? loadRowVeg() : loadDate();
-  document.getElementById("density-select").onchange = () => appMode === "row" ? loadDate() : null;
+  document.getElementById("density-select").onchange = () => appMode === "plant" ? loadPlant() : appMode === "separation" ? loadRowVeg() : loadDate();
   document.getElementById("plant-all-dates").onchange = () => populateDateSelect(dateSelect.value);
   document.getElementById("load-row-veg").onclick = loadRowVeg;
   document.getElementById("target-new-plant").onclick = () => {
