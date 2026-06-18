@@ -9,6 +9,14 @@ mask.
 The full tool documentation lives in **[`demo/README.md`](./demo/README.md)**.
 This page is a short overview.
 
+<p align="center">
+  <img src="./assets/fp4d_pipeline.png" width="100%"/>
+</p>
+
+The labelling pipeline on one maize row: (A) ground removal, (B) per-plant
+isolation, (C) leaf and stem segmentation, (D) NURBS lofted surfaces fit to the
+labelled plant.
+
 ## What it does
 
 - Opens any chosen dataset folder, including the raw bonndata FieldPheno4D
