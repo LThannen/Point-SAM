@@ -22,6 +22,8 @@
             <select id="dataset-select"></select>
             <input id="dataset-root" type="text" placeholder="/path/to/dataset">
             <button id="set-dataset">Set dataset</button>
+            <label for="plot-select">Plot</label>
+            <select id="plot-select"></select>
             <label for="date-select">Date</label>
             <select id="date-select">
                 <option value="230601">230601</option>
@@ -145,6 +147,31 @@
     <div id="preview">
         <canvas id="viewer"></canvas>
         <canvas id="draw-overlay"></canvas>
+        <div id="sam-help" class="hidden">
+            <div id="sam-help-head">
+                <span>Smart Mask (Point-SAM)</span>
+                <button id="sam-help-close" title="Hide (toggle with ?)">&times;</button>
+            </div>
+            <div id="sam-help-body">
+                <p>Click a point and the model proposes a mask for that region. Refine it, then accept.</p>
+                <ul>
+                    <li><b>Include click</b>: left-click a point that <i>should</i> be in the mask.</li>
+                    <li><b>Exclude click</b>: toggle Exclude, then click a point that should <i>not</i> be in it.</li>
+                    <li>Each click refines the live cyan preview. Nothing is saved until you accept.</li>
+                    <li>The model returns 3 candidates (subpart, part, whole); the smallest shows first.</li>
+                </ul>
+                <table id="sam-keys">
+                    <tr><td><kbd>Tab</kbd></td><td>cycle candidate (subpart/part/whole)</td></tr>
+                    <tr><td><kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>cycle backwards</td></tr>
+                    <tr><td><kbd>Enter</kbd></td><td>accept &amp; commit the shown mask</td></tr>
+                    <tr><td><kbd>Esc</kbd></td><td>cancel, clear prompts &amp; preview</td></tr>
+                    <tr><td><kbd>?</kbd></td><td>show / hide this panel</td></tr>
+                </table>
+                <label id="sam-help-context">
+                    <input type="checkbox" id="sam-context-enabled"> use existing labels as extra prompts
+                </label>
+            </div>
+        </div>
     </div>
 </div>
 <script type="module" src="/static/annotate.js"></script>

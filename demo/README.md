@@ -2,9 +2,11 @@
 
 This demo is the FP4D manual segmentation workflow built on Point-SAM. It can:
 
-- open a staged FP4D dataset folder,
+- open a staged FP4D dataset folder or the raw bonndata FieldPheno4D download,
+- auto-detect every plot under a chosen root and pick a plant by crop/variety name,
 - render the full-resolution point cloud,
-- run Point-SAM on a capped model sample,
+- run Point-SAM on a capped model sample (native-style: click-driven, neutral
+  features, subpart/part/whole candidates you cycle with `Tab`),
 - propagate masks back to the full cloud,
 - save row vegetation, plant separation, and leaf/stem labels back into the selected dataset folder.
 
@@ -46,16 +48,43 @@ fp4d_pointsam_dataset/
     PlotXX/plant_NN/handlabel_NN_<date>_qc.png
 ```
 
-You can also point `--dataset-root` or the UI dataset path directly at a raw FP4D plot folder:
+### Opening the published FieldPheno4D dataset directly
+
+The raw dataset other people download is the bonndata FieldPheno4D release:
 
 ```text
-/path/to/doi-10.60507-fk2-hyi2ds/Plot07/
-  230516.las
-  230525.las
-  ...
+https://bonndata.uni-bonn.de/dataset.xhtml?persistentId=doi:10.60507/FK2/HYI2DS
 ```
 
-In that case the app derives `plot=Plot07`, discovers dates from the `.las` files, and writes new labels under the selected `Plot07/` folder.
+Point `--dataset-root` (or the UI dataset path) straight at the unzipped download root:
+
+```text
+/path/to/doi-10.60507-fk2-hyi2ds/
+  Plot01/ 230516.las 230525.las ...
+  Plot02/ ...
+  ...
+  Plot07/ ...
+```
+
+The app auto-detects every `PlotXX` that contains `.las` files and fills the **Plot**
+dropdown. Each plot is labelled by its crop and variety (not the bare `PlotNN`), taken
+from the dataset timetable, since the README in the download mislabels every plot as
+"bean". The mapping lives in `PLOT_CROP` in `app.py`:
+
+```text
+Plot01  Mallory (Bean)
+Plot02  Sorbas (Wheat)
+Plot03  Mirza (Corn)
+Plot04  Popcorn Robust (Corn)
+Plot05  Balena (Potato)
+Plot06  Sugar Beet
+Plot07  Brassica Carinata (Brassica)
+```
+
+Pick a plant from the **Plot** dropdown and the Date list refreshes from that plot's
+`.las` files. New labels are written under the selected `PlotXX/` folder. You can also
+point at a single plot folder (`.../doi-10.60507-fk2-hyi2ds/Plot03/`); the Plot dropdown
+then hides and `plot=Plot03` is used directly.
 
 ## Install
 
@@ -218,9 +247,12 @@ If the dataset has no `row_frame.json`, row mode does not crop by row frame and 
 
 At the top of the sidebar:
 
-1. Select a dataset from the dropdown, or paste a dataset path.
+1. Select a dataset from the dropdown, or paste a dataset path (for example the
+   unzipped bonndata download root).
 2. Click `Set dataset`.
-3. The Date and Plant dropdowns refresh from the selected folder.
+3. If the root holds several plots, the **Plot** dropdown fills with the plant
+   names (crop and variety). Pick the plant you want to work on.
+4. The Date and Plant dropdowns refresh from the selected plot.
 
 Writes go into the selected dataset root:
 
@@ -260,24 +292,40 @@ Wheel           Zoom.
 
 ### Smart Mask
 
-Smart Mask is preview-first:
+Smart Mask runs Point-SAM the way the native demo does: your clicks drive the mask,
+and the model proposes candidate masks you choose from. Selecting the `Smart Mask`
+tool pops up a small help panel over the viewer that restates this and the shortcuts.
+
+Behaviour matched to native Point-SAM:
+
+- The model is fed neutral `0.5` features, like the native `real_infer.py` /
+  `smoke_infer.py` scripts. Height is no longer used as a fake colour channel
+  (that was out-of-distribution for the checkpoint and degraded masks). Height is
+  still available as an optional post-filter (`height filter cm`).
+- Existing labels are NOT injected as extra prompts by default, so a single click
+  is not drowned by context points. Re-enable this via the `use existing labels as
+  extra prompts` checkbox in the help panel when you want label-guided masks.
+- Each click returns three candidates (subpart, part, whole). The smallest shows
+  first, which is what you usually want for leaf or part isolation, instead of the
+  whole-object mask that `argmax(iou)` collapses to.
+
+Workflow:
 
 1. Select `Smart Mask`.
 2. Select the target class or plant/leaf target.
-3. Use `Include Click` for positive prompts.
-4. Use `Exclude Click` for negative prompts.
-5. Every click updates the cyan preview mask.
-6. Press `Enter` or click `Accept mask` to commit.
-7. Press `Esc` or `Clear Prompts` to cancel.
+3. `Include Click` adds a positive prompt; `Exclude Click` adds a negative one.
+4. Every click updates the cyan preview mask. Nothing is saved yet.
+5. `Tab` cycles through the candidates (subpart, part, whole); `Shift+Tab` cycles back.
+6. `Enter` or `Accept mask` commits the shown candidate.
+7. `Esc` or `Clear Prompts` cancels.
+8. `?` toggles the help panel.
 
-The status line shows:
+The status line shows the preview mask point count, total prompts, positive/negative
+counts, the current candidate index (`mask 1/3`), and predicted IoU.
 
-- preview mask point count,
-- total prompts,
-- positive/negative prompt count,
-- predicted IoU.
-
-The backend accumulates prompts until commit or clear. After commit, prompts are reset.
+The backend accumulates prompts until commit or clear, and exposes the candidates on
+`/segment` plus a `/select_mask` route used by `Tab`. After commit, prompts and
+candidates are reset.
 
 ## Export
 
@@ -375,14 +423,19 @@ seg1 = post('/segment', {
     'prompt_label': True,
     'active_label': 1,
     'target': {'kind': 'stem'},
-    'use_label_context': True,
 })
+# include click drives the mask; candidates = subpart/part/whole
+print('candidates', [c['count'] for c in seg1['candidates']], 'selected', seg1['selected'])
+
+# Tab-cycle to the next candidate without re-running the model
+sel = post('/select_mask', {'index': seg1['selected'] + 1})
+print('cycled to', sel['selected'], 'of', sel['num_candidates'], '->', sel['count'])
+
 seg2 = post('/segment', {
     'prompt_point': p1,
-    'prompt_label': False,
+    'prompt_label': False,        # exclude click refines the same preview
     'active_label': 1,
     'target': {'kind': 'stem'},
-    'use_label_context': True,
 })
 commit = post('/commit', {'label': 1, 'target': {'kind': 'stem'}, 'layer_policy': {}})
 print(len(seg1['seg']), sum(seg1['seg']))

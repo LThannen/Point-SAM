@@ -23,6 +23,8 @@ let toolMode = "brush";
 let promptIndices = [];
 let promptLabels = [];
 let previewMask = null;
+let samCandidates = [];
+let samSelected = 0;
 let previewContext = null;
 let persistentLabels = [];
 let persistentOtype = [];
@@ -298,6 +300,23 @@ function populateDateSelect(preferredDate = null) {
   }
 }
 
+function populatePlotSelect(plots = [], active = null) {
+  const sel = document.getElementById("plot-select");
+  if (!sel) return;
+  sel.innerHTML = "";
+  for (const plot of plots) {
+    // Accept either {id,label} objects or bare "PlotNN" strings.
+    const id = typeof plot === "string" ? plot : plot.id;
+    const label = typeof plot === "string" ? plot : plot.label;
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = label;
+    if (id === active) option.selected = true;
+    sel.appendChild(option);
+  }
+  sel.style.display = plots.length > 1 ? "" : "none";
+}
+
 function populatePlantSelect(plants = [], preferred = "06") {
   const plantSelect = document.getElementById("plant-select");
   if (!plantSelect) return;
@@ -330,26 +349,31 @@ async function populateDatasetSelect() {
     const option = document.createElement("option");
     option.value = ds.root;
     option.textContent = `${ds.plot}: ${ds.root}`;
-    if (ds.active) option.selected = true;
+    if (ds.active) {
+      option.selected = true;
+      populatePlotSelect(ds.plots || [], ds.plot);
+    }
     select.appendChild(option);
   }
   input.value = data.active?.root || select.value || "";
   select.onchange = () => {
     input.value = select.value;
+    const chosen = (data.datasets || []).find((d) => d.root === select.value);
+    if (chosen) populatePlotSelect(chosen.plots || [], chosen.plot);
   };
 }
 
-async function setDataset() {
+async function setDataset(plot = null) {
   const root = document.getElementById("dataset-root").value.trim();
   if (!root) {
     setStatus("Dataset path is empty");
     return;
   }
-  setStatus(`Switching dataset to ${root}...`);
+  setStatus(`Switching dataset to ${root}${plot ? " / " + plot : ""}...`);
   const response = await fetch("/set_dataset", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ root }),
+    body: JSON.stringify({ root, plot }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -358,12 +382,20 @@ async function setDataset() {
   }
   promptIndices = [];
   promptLabels = [];
+  samCandidates = [];
+  samSelected = 0;
   previewMask = null;
   previewContext = null;
   ghostedPlantIds.clear();
+  populatePlotSelect(data.plots || [], data.dataset.plot);
   adoptDatasetMeta(data);
   await populateDatasetSelect();
-  setStatus(`Dataset set: ${data.dataset.plot} (${data.dates.length} dates, ${data.plants.length} plants)`);
+  const plotCount = (data.plots || []).length;
+  setStatus(
+    `Dataset set: ${data.dataset.plot}` +
+      `${plotCount > 1 ? ` (1 of ${plotCount} plots)` : ""}, ` +
+      `${data.dates.length} dates, ${data.plants.length} plants`
+  );
 }
 
 function renderLeafList(leaves) {
@@ -472,12 +504,17 @@ function layerPolicyPayload() {
   };
 }
 
+function setSamHelp(show) {
+  document.getElementById("sam-help")?.classList.toggle("hidden", !show);
+}
+
 function setToolMode(mode) {
   toolMode = mode;
   for (const id of ["tool-brush", "tool-lasso", "tool-sam", "tool-crop", "tool-delete"]) {
     document.getElementById(id).classList.remove("active");
   }
   document.getElementById(`tool-${mode}`).classList.add("active");
+  setSamHelp(mode === "sam");
   setStatus(
     mode === "brush"
       ? "Brush: click or drag over points to paint the active class"
@@ -738,7 +775,7 @@ async function onSamClick(event) {
       prompt_label: promptIsPositive,
       active_label: activeLabel,
       target: activeTarget,
-      use_label_context: true,
+      use_label_context: document.getElementById("sam-context-enabled")?.checked ?? false,
       use_height_prior: document.getElementById("sam-height-enabled").checked,
       height_threshold: Number(document.getElementById("sam-height-cm").value) / 100.0,
       flood_points: Number(document.getElementById("sam-flood-points").value || 0),
@@ -750,6 +787,8 @@ async function onSamClick(event) {
     return;
   }
 
+  samCandidates = data.candidates || [];
+  samSelected = data.selected ?? 0;
   const pos = promptLabels.filter((x) => x > 0).length;
   const neg = promptLabels.length - pos;
   const maskCount = data.seg.filter(Boolean).length;
@@ -762,9 +801,30 @@ async function onSamClick(event) {
     floodKept: data.flood_kept,
     floodDropped: data.flood_dropped,
   });
+  const candText = samCandidates.length > 1 ? ` [mask ${samSelected + 1}/${samCandidates.length}, Tab cycles]` : "";
   setStatus(
     `Preview ${maskCount.toLocaleString()} points; prompts ${promptLabels.length} ` +
-      `(+${pos}/-${neg}); iou ${Number(data.iou || 0).toFixed(3)}. Enter accepts, Esc cancels.`
+      `(+${pos}/-${neg}); iou ${Number(data.iou || 0).toFixed(3)}.${candText} Enter accepts, Esc cancels.`
+  );
+}
+
+async function cycleMask(delta) {
+  if (samCandidates.length < 2) return;
+  samSelected = (samSelected + delta + samCandidates.length) % samCandidates.length;
+  const response = await fetch("/select_mask", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ index: samSelected }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    setStatus(data.error || "Mask cycle failed");
+    return;
+  }
+  renderPreviewMask(data.seg, previewContext);
+  setStatus(
+    `Mask ${samSelected + 1}/${data.num_candidates} — ${Number(data.count).toLocaleString()} points; ` +
+      `iou ${Number(data.iou || 0).toFixed(3)}. Tab cycles, Enter accepts, Esc cancels.`
   );
 }
 
@@ -786,6 +846,8 @@ async function commitMask(context = null) {
   }
   promptIndices = [];
   promptLabels = [];
+  samCandidates = [];
+  samSelected = 0;
   clearPreviewMask();
   if (appMode === "separation" && activeTarget.kind === "new_plant" && data.target_plant_id >= 0) {
     activeTarget = { kind: "plant", plant_id: data.target_plant_id };
@@ -814,6 +876,8 @@ async function commitMask(context = null) {
 async function clearPrompts() {
   promptIndices = [];
   promptLabels = [];
+  samCandidates = [];
+  samSelected = 0;
   previewMask = null;
   previewContext = null;
   await fetch("/clear", { method: "POST" });
@@ -1059,7 +1123,8 @@ function bindButtons(initialData) {
     syncTargetButtons();
   };
 
-  document.getElementById("set-dataset").onclick = setDataset;
+  document.getElementById("set-dataset").onclick = () => setDataset();
+  document.getElementById("plot-select").onchange = (e) => setDataset(e.target.value);
   document.getElementById("mode-select").onchange = (event) => switchMode(event.target.value);
   document.getElementById("load-plant").onclick = loadPlant;
   document.getElementById("prev-plant").onclick = () => stepPlant(-1);
@@ -1084,6 +1149,7 @@ function bindButtons(initialData) {
   document.getElementById("tool-brush").onclick = () => setToolMode("brush");
   document.getElementById("tool-lasso").onclick = () => setToolMode("lasso");
   document.getElementById("tool-sam").onclick = () => setToolMode("sam");
+  document.getElementById("sam-help-close").onclick = () => setSamHelp(false);
   document.getElementById("tool-crop").onclick = () => setToolMode("crop");
   document.getElementById("tool-delete").onclick = () => setToolMode("delete");
   document.getElementById("class-plant").onclick = () => setActiveLabel(1);
@@ -1151,6 +1217,12 @@ window.addEventListener("keydown", async (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
     event.preventDefault();
     await undoCommit();
+  } else if (event.key === "?" && toolMode === "sam") {
+    event.preventDefault();
+    setSamHelp(document.getElementById("sam-help")?.classList.contains("hidden"));
+  } else if (event.key === "Tab" && toolMode === "sam" && samCandidates.length > 1) {
+    event.preventDefault();
+    await cycleMask(event.shiftKey ? -1 : 1);
   } else if (event.key === "Enter" && toolMode === "sam") {
     event.preventDefault();
     await commitMask(previewContext);

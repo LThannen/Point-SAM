@@ -153,20 +153,72 @@ def _read_row_frame(root: Path) -> dict | None:
     return None
 
 
+# FieldPheno4D plot -> (crop, variety). Source: the bonndata timetable PDF
+# (authoritative); the dataset README mislabels every plot as "bean".
+PLOT_CROP = {
+    "Plot01": ("Bean", "Mallory"),
+    "Plot02": ("Wheat", "Sorbas"),
+    "Plot03": ("Corn", "Mirza"),
+    "Plot04": ("Corn", "Popcorn Robust"),
+    "Plot05": ("Potato", "Balena"),
+    "Plot06": ("Sugar Beet", None),
+    "Plot07": ("Brassica", "Brassica Carinata"),
+}
+
+
+def _plot_label(name: str) -> str:
+    crop, variety = PLOT_CROP.get(name, (None, None))
+    if variety and crop:
+        return f"{variety} ({crop}, {name})"
+    if crop:
+        return f"{crop} ({name})"
+    return name
+
+
+def _plot_options(root: Path) -> list[dict]:
+    """Plot picker entries: id is the PlotNN dir, label is the crop/variety."""
+    return [{"id": name, "label": _plot_label(name)} for name in _plots_under(root)]
+
+
+def _plots_under(root: Path) -> list[str]:
+    """All selectable plot names under a dataset root.
+
+    Handles the published raw layout (root/PlotNN/<date>.las, e.g. the bonndata
+    FieldPheno4D download), the staged layout (root/stage*/PlotNN), and a root
+    that is itself one plot directory.
+    """
+    try:
+        root = Path(root).expanduser().resolve()
+    except OSError:
+        return []
+    if not root.exists():
+        return []
+    names: set[str] = set()
+    for stage in ("stage1_ground_removed", "stage2_plants_isolated", "stage3_leafstem_labeled"):
+        stage_dir = root / stage
+        try:
+            if stage_dir.exists():
+                names.update(p.name for p in stage_dir.iterdir() if p.is_dir())
+        except OSError:
+            continue
+    try:
+        for p in root.glob("Plot*"):
+            if p.is_dir() and any(p.glob("*.las")):
+                names.add(p.name)
+    except OSError:
+        pass
+    if not names and (any(root.glob("*.las")) or (root / "base_centres.npy").exists()):
+        names.add(root.name)
+    return sorted(names)
+
+
 def _choose_plot(root: Path, requested: str | None) -> str:
     if requested:
         return requested
     if root.name.startswith("Plot") and root.name[4:].isdigit():
         return root.name
-    candidates = []
-    for stage in ("stage1_ground_removed", "stage2_plants_isolated", "stage3_leafstem_labeled"):
-        stage_dir = root / stage
-        try:
-            if stage_dir.exists():
-                candidates.extend(p.name for p in stage_dir.iterdir() if p.is_dir())
-        except OSError:
-            continue
-    return sorted(candidates)[0] if candidates else LEGACY_PLOT
+    plots = _plots_under(root)
+    return plots[0] if plots else LEGACY_PLOT
 
 
 def _resolve_dataset(root: Path, plot: str | None = None) -> Dataset:
@@ -524,8 +576,11 @@ def _set_active_cloud(
         else:
             model_idx = np.sort(rng.choice(real_count, cap, replace=False)).astype(np.int64)
         model_xyz_norm = xyz_norm[model_idx]
-        model_height_norm = height_norm[model_idx]
-        pc_features_np = np.repeat(model_height_norm[:, None], 3, axis=1).astype(np.float32)
+        # Native Point-SAM feeds neutral 0.5 features (scan has no colour); the
+        # mixture checkpoint was trained that way. Feeding height-as-fake-RGB is
+        # out-of-distribution and degrades the mask. Height is still applied as a
+        # separate post-filter (use_height_prior) in segment().
+        pc_features_np = np.full((len(model_xyz_norm), 3), 0.5, dtype=np.float32)
         pc_xyz_np = model_xyz_norm
         if len(pc_xyz_np) < 1024:
             pad = 1024 - len(pc_xyz_np)
@@ -1474,6 +1529,7 @@ def _dataset_options():
             {
                 "root": str(ds.root),
                 "plot": ds.plot,
+                "plots": _plot_options(ds.root),
                 "dates": list(ds.dates),
                 "plants": list(ds.plants),
                 "active": ds.root == active_dataset.root and ds.plot == active_dataset.plot,
@@ -1521,6 +1577,7 @@ def set_dataset_server():
                 "plot": active_dataset.plot,
                 "raw_dir": None if active_dataset.raw_dir is None else str(active_dataset.raw_dir),
             },
+            "plots": _plot_options(root),
             "dates": list(active_dataset.dates),
             "early_dates": list(active_dataset.early_dates),
             "separation_dates": list(active_dataset.separation_dates),
@@ -1786,6 +1843,36 @@ def reset_crop():
     return jsonify({"status": "crop_reset", **_cloud_payload()})
 
 
+def _apply_mask_priors(mask, active_label, use_height_prior, height_threshold, flood_points, prompt_point):
+    """Apply optional height-prior + local-flood post-filters to a full-res mask.
+
+    Returns (mask, meta) where meta carries the per-mask filter counts. Operates
+    on a copy so candidate masks stay independent.
+    """
+    mask = mask.copy()
+    height_removed = 0
+    if use_height_prior and active_label == 1:
+        before = int(mask.sum())
+        mask &= state["height"] >= height_threshold
+        height_removed = before - int(mask.sum())
+    elif use_height_prior and active_label == 2:
+        before = int(mask.sum())
+        mask &= state["height"] < height_threshold
+        height_removed = before - int(mask.sum())
+    flood_dropped = 0
+    flood_kept = 0
+    if flood_points > 0 and int(mask.sum()) > flood_points:
+        prompt_np = np.asarray(prompt_point, dtype=np.float32)
+        mask_idx = np.flatnonzero(mask)
+        dist2 = np.sum((state["xyz_norm"][mask_idx] - prompt_np) ** 2, axis=1)
+        keep_idx = mask_idx[np.argsort(dist2)[:flood_points]]
+        flood_dropped = int(mask.sum()) - int(len(keep_idx))
+        flood_kept = int(len(keep_idx))
+        mask[:] = False
+        mask[keep_idx] = True
+    return mask, {"height_removed": height_removed, "flood_kept": flood_kept, "flood_dropped": flood_dropped}
+
+
 @app.route("/segment", methods=["POST"])
 def segment():
     _ensure_loaded()
@@ -1794,7 +1881,7 @@ def segment():
     prompt_label = int(bool(data["prompt_label"]))
     active_label = int(data.get("active_label", 0))
     target = data.get("target") or {}
-    use_label_context = bool(data.get("use_label_context", True))
+    use_label_context = bool(data.get("use_label_context", False))
     use_height_prior = bool(data.get("use_height_prior", args.use_height_prior))
     height_threshold = float(data.get("height_threshold", args.plant_height_threshold))
     flood_points = int(data.get("flood_points", 0) or 0)
@@ -1814,57 +1901,82 @@ def segment():
     start = time.time()
     with torch.no_grad():
         masks, iou = _predict_with_cached_encoder(prompt_coords, prompt_labels, multimask_output=True)
-    best = int(torch.argmax(iou[0]))
     model_count = len(state["model_idx"])
-    model_mask = (masks[0, best] > 0).detach().cpu().numpy()[:model_count]
+    num_cand = int(masks.shape[1])
+    ious = [float(iou[0, j]) for j in range(num_cand)]
+
+    # Propagate each model-space candidate to the full-res cloud once (shared NN).
     if model_count == state["real_count"]:
-        mask = model_mask
+        nn_idx = None
     else:
         _, nn_idx = cKDTree(state["model_xyz_norm"]).query(state["xyz_norm"], k=1, workers=-1)
-        mask = model_mask[nn_idx]
-    height_prior_count = 0
-    if use_height_prior and active_label == 1:
-        before = int(mask.sum())
-        mask &= state["height"] >= height_threshold
-        height_prior_count = before - int(mask.sum())
-    elif use_height_prior and active_label == 2:
-        before = int(mask.sum())
-        mask &= state["height"] < height_threshold
-        height_prior_count = before - int(mask.sum())
-    flood_dropped = 0
-    flood_kept = 0
-    if flood_points > 0 and int(mask.sum()) > flood_points:
-        prompt_np = np.asarray(prompt_point, dtype=np.float32)
-        mask_idx = np.flatnonzero(mask)
-        dist2 = np.sum((state["xyz_norm"][mask_idx] - prompt_np) ** 2, axis=1)
-        keep_idx = mask_idx[np.argsort(dist2)[:flood_points]]
-        flood_dropped = int(mask.sum()) - int(len(keep_idx))
-        flood_kept = int(len(keep_idx))
-        mask[:] = False
-        mask[keep_idx] = True
+
+    candidates = []
+    metas = []
+    for j in range(num_cand):
+        model_mask = (masks[0, j] > 0).detach().cpu().numpy()[:model_count]
+        full = model_mask if nn_idx is None else model_mask[nn_idx]
+        full, meta = _apply_mask_priors(
+            full, active_label, use_height_prior, height_threshold, flood_points, prompt_point
+        )
+        candidates.append(full)
+        metas.append(meta)
+
+    # Native Point-SAM emits subpart/part/whole; expose all and let the user cycle.
+    # Default to the smallest candidate (most useful for leaf/part isolation), not
+    # argmax(iou) which collapses to the whole-object mask.
+    sizes = [int(c.sum()) for c in candidates]
+    selected = int(np.argmin(sizes))
+    state["candidate_masks"] = candidates
+    state["candidate_ious"] = ious
+    state["selected_candidate"] = selected
+    mask = candidates[selected]
     state["current_mask"] = mask
     elapsed = time.time() - start
     print(
         f"segment {state['date']}: prompts={len(state['prompt_coords'])} "
         f"context={len(context_coords)} active={active_label} "
-        f"model={model_count:,}/{state['real_count']:,} "
-        f"height_prior={use_height_prior} threshold={height_threshold:.3f} removed={height_prior_count:,} "
-        f"flood_points={flood_points} flood_dropped={flood_dropped:,} "
-        f"mask={int(mask.sum()):,}/{len(mask):,} iou={float(iou[0, best]):.3f} {elapsed:.3f}s",
+        f"model={model_count:,}/{state['real_count']:,} cands={sizes} ious={[round(v,3) for v in ious]} "
+        f"sel={selected} mask={int(mask.sum()):,}/{len(mask):,} {elapsed:.3f}s",
         flush=True,
     )
     return jsonify(
         {
             "seg": mask.tolist(),
-            "iou": float(iou[0, best]),
+            "iou": ious[selected],
+            "selected": selected,
+            "candidates": [
+                {"iou": ious[j], "count": sizes[j]} for j in range(num_cand)
+            ],
             "elapsed": elapsed,
             "context_prompts": len(context_coords),
-            "height_prior_removed": height_prior_count,
+            "height_prior_removed": metas[selected]["height_removed"],
             "flood_points": flood_points,
-            "flood_kept": flood_kept,
-            "flood_dropped": flood_dropped,
+            "flood_kept": metas[selected]["flood_kept"],
+            "flood_dropped": metas[selected]["flood_dropped"],
             "plant_height_threshold": height_threshold,
             "use_height_prior": use_height_prior,
+        }
+    )
+
+
+@app.route("/select_mask", methods=["POST"])
+def select_mask():
+    """Switch the active preview to another multimask candidate (Tab cycling)."""
+    cands = state.get("candidate_masks")
+    if not cands:
+        return jsonify({"error": "no candidates; click first"}), 400
+    data = request.get_json(silent=True) or {}
+    idx = int(data.get("index", 0)) % len(cands)
+    state["selected_candidate"] = idx
+    state["current_mask"] = cands[idx]
+    return jsonify(
+        {
+            "seg": cands[idx].tolist(),
+            "iou": state["candidate_ious"][idx],
+            "selected": idx,
+            "count": int(cands[idx].sum()),
+            "num_candidates": len(cands),
         }
     )
 

@@ -33,3 +33,4 @@ model_ts*.txt
 .vscode
 _darcs
 /pretrained
+demo/server.log
