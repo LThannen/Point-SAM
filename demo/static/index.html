@@ -2,40 +2,150 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Directory Browser</title>
+    <title>FP4D Plot03 2-Class Labeller</title>
     <link rel="stylesheet" href="/static/style.css">
-    <script type="importmap"> 
-        { 
-            "imports": { 
-                "three": "https://unpkg.com/three@0.162.0/build/three.module.js", 
-                "three/addons/": "https://unpkg.com/three@0.162.0/examples/jsm/" 
-             } 
-        } 
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.162.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.162.0/examples/jsm/"
+             }
+        }
     </script>
 </head>
 
 <body>
 <div id="container">
     <div id="sidebar">
-        <div id="tool-box">
-            <button id="annotate-positive">Positive Prompt</button>
-            <button id="annotate-negative">Negative Prompt</button>
-            <button id="annotate-next">Next Mask</button>
-            <button id="save-result">Save Annotation</button>
-            <button id="clear-result">Clear Annotation</button>
+            <div id="tool-box">
+            <label for="dataset-select">Dataset</label>
+            <select id="dataset-select"></select>
+            <input id="dataset-root" type="text" placeholder="/path/to/dataset">
+            <button id="set-dataset">Set dataset</button>
+            <label for="date-select">Date</label>
+            <select id="date-select">
+                <option value="230601">230601</option>
+                <option value="230606">230606</option>
+                <option value="230613">230613</option>
+                <option value="230619">230619</option>
+                <option value="230621">230621</option>
+                <option value="230625">230625</option>
+                <option value="230629">230629</option>
+                <option value="230705">230705</option>
+                <option value="230711" selected>230711</option>
+            </select>
+            <label for="density-select">Point density</label>
+            <select id="density-select">
+                <option value="120000">120k</option>
+                <option value="200000">200k</option>
+                <option value="300000" selected>300k</option>
+                <option value="500000">500k</option>
+            </select>
+            <label for="mode-select">Mode</label>
+            <select id="mode-select">
+                <option value="row" selected>Full row 2-class</option>
+                <option value="separation">Row plant-separation</option>
+                <option value="plant">Per-plant leaf/stem</option>
+            </select>
+            <div id="separation-controls" class="separation-only">
+                <label class="check-row">
+                    <input type="checkbox" id="seed-auto-separation" checked>
+                    seed from auto separation
+                </label>
+                <button id="load-row-veg">Load row veg</button>
+                <div class="group-title">Plant Targets</div>
+                <button id="target-new-plant">New plant</button>
+                <button id="target-unassign">Unassign</button>
+                <div id="plant-list"></div>
+            </div>
+            <div id="plant-controls" class="plant-only">
+                <label class="check-row">
+                    <input type="checkbox" id="plant-all-dates" checked>
+                    show all dates
+                </label>
+                <label for="plant-select">Plant</label>
+                <select id="plant-select"></select>
+                <div class="button-row">
+                    <button id="prev-plant">Prev</button>
+                    <button id="next-plant">Next</button>
+                </div>
+                <button id="load-plant">Load plant</button>
+            </div>
+
+            <div class="group-title">Tool</div>
+            <button id="tool-brush">Brush Paint</button>
+            <button id="tool-lasso">Lasso Paint</button>
+            <button id="tool-crop" class="row-only">Crop Box</button>
+            <button id="tool-delete">Delete Points</button>
+            <button id="tool-sam">Smart Mask</button>
+            <label for="brush-size">Brush size</label>
+            <select id="brush-size">
+                <option value="10">Small</option>
+                <option value="18" selected>Medium</option>
+                <option value="30">Large</option>
+                <option value="48">Huge</option>
+            </select>
+            <div class="hint">Left click/drag paints. Middle drag rotates. Right drag pans. Wheel zooms.</div>
+
+            <div class="group-title">Paint Colour</div>
+            <button id="class-plant">Plant / Stem</button>
+            <button id="class-ground">Ground / Leaf</button>
+            <button id="class-erase">Erase</button>
+
+            <div id="leaf-controls" class="plant-only">
+                <div class="group-title">Leaf Targets</div>
+                <button id="target-stem">Stem</button>
+                <button id="target-new-leaf">New leaf</button>
+                <button id="target-eraser">Eraser</button>
+                <button id="renumber-leaves">Renumber by height</button>
+                <div id="leaf-list"></div>
+            </div>
+
+            <div class="group-title">Smart Mask</div>
+            <div class="hint">Include/exclude clicks preview a mask. Enter accepts. Esc cancels.</div>
+            <button id="annotate-positive">Include Click</button>
+            <button id="annotate-negative">Exclude Click</button>
+            <label class="check-row">
+                <input type="checkbox" id="sam-height-enabled">
+                use height filter
+            </label>
+            <label for="sam-height-cm">height filter cm</label>
+            <input id="sam-height-cm" type="number" min="0" max="200" step="1" value="5">
+            <label for="sam-flood-points">local flood points</label>
+            <input id="sam-flood-points" type="number" min="0" max="5000" step="25" value="0">
+            <label for="sam-policy-plant">existing Plant</label>
+            <select id="sam-policy-plant">
+                <option value="override">Override</option>
+                <option value="protect">Protect</option>
+            </select>
+            <label for="sam-policy-ground">existing Ground</label>
+            <select id="sam-policy-ground">
+                <option value="protect">Protect</option>
+                <option value="override">Override</option>
+            </select>
+            <button id="commit-mask">Accept mask</button>
+            <button id="undo-commit">Undo Commit</button>
+            <button id="clear-prompts">Clear Prompts</button>
+            <button id="reset-labels">Reset Labels</button>
+            <button id="reset-crop" class="row-only">Reset Crop</button>
+
+            <div class="group-title">Export</div>
+            <label class="check-row row-only">
+                <input type="checkbox" id="export-fullres">
+                full-res NN
+            </label>
+            <button id="export-labels">Export</button>
+
+            <div id="sample-info"></div>
+            <div id="counts"></div>
+            <div id="status"></div>
         </div>
     </div>
     <div id="preview">
         <canvas id="viewer"></canvas>
-    </div>
+        <canvas id="draw-overlay"></canvas>
     </div>
 </div>
-<script type="module">
-    function test() {
-        console.log("test");
-    }
-</script>
-<script type="module" src="/static/viewer.js"></script>
 <script type="module" src="/static/annotate.js"></script>
 </body>
 
