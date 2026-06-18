@@ -153,8 +153,11 @@ def _choose_plot(root: Path, requested: str | None) -> str:
     candidates = []
     for stage in ("stage1_ground_removed", "stage2_plants_isolated", "stage3_leafstem_labeled"):
         stage_dir = root / stage
-        if stage_dir.exists():
-            candidates.extend(p.name for p in stage_dir.iterdir() if p.is_dir())
+        try:
+            if stage_dir.exists():
+                candidates.extend(p.name for p in stage_dir.iterdir() if p.is_dir())
+        except OSError:
+            continue
     return sorted(candidates)[0] if candidates else LEGACY_PLOT
 
 
@@ -871,7 +874,10 @@ def _load_plant(plant, date):
 def _ensure_loaded():
     if state["xyz_utm"] is None:
         date = args.date if args.date in active_dataset.dates else (active_dataset.dates[-1] if active_dataset.dates else args.date)
-        _load_date(date, args.n)
+        if active_dataset.raw_dir is None and active_dataset.stage1_dir is not None:
+            _load_row_veg(date)
+        else:
+            _load_date(date, args.n)
 
 
 def _unloaded_status_payload():
@@ -1393,7 +1399,7 @@ def _dataset_options():
         seen.add(root)
         try:
             ds = _resolve_dataset(root, None)
-        except (FileNotFoundError, RuntimeError, ValueError):
+        except (OSError, RuntimeError, ValueError):
             continue
         out.append(
             {
@@ -2068,4 +2074,4 @@ def export():
 
 
 if __name__ == "__main__":
-    app.run(host=args.host, port=args.port, debug=False, use_reloader=False)
+    app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=False)

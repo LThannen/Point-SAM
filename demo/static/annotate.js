@@ -712,6 +712,8 @@ async function deleteIndices(indices) {
   ingestLabels(data);
   promptIndices = [];
   promptLabels = [];
+  previewMask = null;
+  previewContext = null;
   repaint();
   updateCounts(data);
   setStatus(`Deleted ${data.deleted.toLocaleString()} points`);
@@ -900,6 +902,8 @@ async function loadDate() {
   ingestLabels(data);
   promptIndices = [];
   promptLabels = [];
+  previewMask = null;
+  previewContext = null;
   repaint();
   updateCounts(data);
   setStatus(`Loaded ${date}`);
