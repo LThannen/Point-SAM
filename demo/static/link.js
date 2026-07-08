@@ -38,9 +38,26 @@ function dim(rgb) { return rgb.map((v) => 0.45 * v + 0.5); }   // pastel version
 function cssColor(rgb) { return `rgb(${rgb.map((v) => Math.round(v * 255)).join(", ")})`; }
 function escapeHtml(v) { return String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function currentPlant() {
+  const lp = document.getElementById("link-plant");     // the linker's own picker (visible in link mode)
+  if (lp && lp.value) return lp.value;
   const sel = document.getElementById("plant-select");
   const v = sel && sel.value ? sel.value : "1";
   return v.toString().padStart(2, "0");
+}
+async function populatePlants() {
+  const lp = document.getElementById("link-plant");
+  if (!lp) return;
+  try {
+    const data = await fetchJson("/link/plants");
+    const plants = data.plants || [];
+    const opts = plants.map((p) => p.plant);
+    const prev = lp.value;
+    const side = ((document.getElementById("plant-select") || {}).value || "").padStart(2, "0");
+    lp.innerHTML = plants.length
+      ? plants.map((p) => `<option value="${p.plant}">plant ${p.plant} · ${p.n_dates} dates</option>`).join("")
+      : `<option value="">no labeled plants</option>`;
+    if (opts.length) lp.value = opts.includes(prev) ? prev : (opts.includes(side) ? side : opts[0]);
+  } catch (err) { /* keep whatever is there */ }
 }
 function cleanObs(obs) {
   const out = {};
@@ -385,7 +402,7 @@ function ensurePanel() {
     panel = document.createElement("div"); panel.id = "link-panel";
     panel.innerHTML = `
       <div id="link-toolbar">
-        <div class="lk-title"><b>LINK</b><span id="link-meta"></span></div>
+        <div class="lk-title"><b>LINK</b><select id="link-plant" class="lk-plant" title="plant"></select><span id="link-meta"></span></div>
         <div class="lk-actions">
           <button data-link-action="reload">Reload</button>
           <button data-link-action="fresh">Reset to auto</button>
@@ -430,6 +447,8 @@ function ensurePanel() {
   state.canvas.addEventListener("click", selectAtEvent);
   state.canvas.addEventListener("wheel", (e) => { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12); }, { passive: false });
   state.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  const lp = document.getElementById("link-plant");
+  if (lp && !lp.dataset.wired) { lp.dataset.wired = "1"; lp.addEventListener("change", () => loadData(false)); }
   if (!state.resizeObserver && state.wrap) { state.resizeObserver = new ResizeObserver(resizeCanvas); state.resizeObserver.observe(state.wrap); }
 }
 function installModeOption() {
@@ -443,7 +462,9 @@ function togglePanel() {
   const sel = document.getElementById("mode-select"); if (!state.panel || !sel) return;
   if (sel.value === MODE) {
     state.panel.classList.add("on");
-    if (currentPlant() !== state.loadedPlant || !state.views.length) loadData(false); else resizeCanvas();
+    populatePlants().then(() => {
+      if (currentPlant() !== state.loadedPlant || !state.views.length) loadData(false); else resizeCanvas();
+    });
   } else state.panel.classList.remove("on");
 }
 function setup() {

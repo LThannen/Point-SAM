@@ -15,6 +15,7 @@ dense/occluded plants.
 """
 import json
 import math
+import re
 import sys
 
 import numpy as np
@@ -211,7 +212,28 @@ def save_chains(dataset, plant, chains):
     return mp, len(clean)
 
 
+def available_plants(dataset):
+    """Plants under leafstem_root that have >=2 dates of hand-labels (linkable)."""
+    root = getattr(dataset, "leafstem_root", None)
+    out = []
+    if not root or not root.exists():
+        return out
+    for pdir in sorted(root.glob("plant_*")):
+        m = re.match(r"plant_(\d+)$", pdir.name)
+        if not m:
+            continue
+        p = int(m.group(1))
+        n = sum(1 for d in dataset.dates if (pdir / f"handlabel_{p:02d}_{d}.npy").exists())
+        if n >= 2:
+            out.append({"plant": f"{p:02d}", "n_dates": n})
+    return out
+
+
 def register_link_routes(app, get_dataset, npy_dict):
+    @app.route("/link/plants")
+    def link_plants():
+        return jsonify({"plants": available_plants(get_dataset())})
+
     @app.route("/link/clouds")
     def link_clouds():
         plant = request.args.get("plant", "01")
