@@ -357,10 +357,9 @@ async function loadData(fresh = false) {
     // keep only stages that actually have >=1 labeled leaf
     state.dates = dates.filter((d) => leavesOf(d).length > 0);
     state.chains = normalizeChains(chains.chains || []);
-    // Focus on the stages the seed/comparison actually use (drops sparse early
-    // scans with no tracked identities); fall back to all if there is no seed.
-    const seedDates = new Set(state.chains.flatMap((c) => Object.keys(c.obs)));
-    if (seedDates.size >= 2) state.dates = state.dates.filter((d) => seedDates.has(d));
+    // Show ALL hand-labeled stages (the earliest anchor the basal leaves).
+    // The auto seed only covers the comparison dates; earlier-stage leaves start
+    // unassigned and you link them by hand.
     state.pairIndex = 0; state.leftCursor = 0;
     if (state.dates.length < 2) { setStatus("Need at least two stages with labeled leaves."); state.views = []; renderUi(); return; }
     showPair();
