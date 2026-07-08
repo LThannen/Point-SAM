@@ -21,6 +21,8 @@ import numpy as np
 from flask import jsonify, request
 
 RELINK_PATH = "/home/lukas/pointr"          # optional: automatic seed source
+DEFAULT_CLOUD_POINTS = 50_000
+MAX_CLOUD_POINTS = 60_000
 
 
 def leaf_signatures(dataset, npy_dict, plant):
@@ -61,6 +63,103 @@ def leaf_signatures(dataset, npy_dict, plant):
                 length=round(length, 1), n=int(len(P)),
             ))
         out[date] = leaves
+    return out
+
+
+def _handlabel_path(dataset, plant, date):
+    p = int(plant)
+    return dataset.leafstem_root / f"plant_{p:02d}" / f"handlabel_{p:02d}_{date}.npy"
+
+
+def _sample_evenly(indices, n):
+    indices = np.asarray(indices, dtype=np.int64)
+    if n >= len(indices):
+        return indices
+    return indices[np.linspace(0, len(indices) - 1, int(n), dtype=np.int64)]
+
+
+def _cloud_groups(otype, leafid):
+    groups = []
+    stem = np.flatnonzero(otype == 1)
+    if len(stem):
+        groups.append(stem)
+    for lid in sorted(int(x) for x in np.unique(leafid) if int(x) > 0):
+        pts = np.flatnonzero((otype == 2) & (leafid == lid))
+        if len(pts):
+            groups.append(pts)
+    known = (otype == 1) | ((otype == 2) & (leafid > 0))
+    other = np.flatnonzero(~known)
+    if len(other):
+        groups.append(other)
+    return groups
+
+
+def _stratified_cloud_indices(otype, leafid, max_points):
+    n = len(otype)
+    target = min(int(max_points), n)
+    if target <= 0:
+        return np.empty(0, dtype=np.int64)
+    if n <= target:
+        return np.arange(n, dtype=np.int64)
+
+    groups = _cloud_groups(otype, leafid)
+    if not groups:
+        return _sample_evenly(np.arange(n), target)
+
+    sizes = np.asarray([len(g) for g in groups], dtype=np.int64)
+    if len(groups) >= target:
+        keep_groups = sorted(np.argsort(-sizes)[:target])
+        sampled = [_sample_evenly(groups[i], 1) for i in keep_groups]
+        return np.sort(np.concatenate(sampled)).astype(np.int64)
+
+    floor = min(300, max(1, target // max(1, len(groups) * 4)))
+    alloc = np.minimum(sizes, np.maximum(floor, np.rint(target * sizes / sizes.sum()).astype(np.int64)))
+
+    while int(alloc.sum()) > target:
+        can_trim = np.where(alloc > 1, alloc, -1)
+        i = int(np.argmax(can_trim))
+        if can_trim[i] <= 1:
+            break
+        alloc[i] -= 1
+    while int(alloc.sum()) < target:
+        deficit = sizes - alloc
+        i = int(np.argmax(deficit))
+        if deficit[i] <= 0:
+            break
+        alloc[i] += 1
+
+    sampled = [_sample_evenly(group, keep) for group, keep in zip(groups, alloc) if keep > 0]
+    return np.sort(np.concatenate(sampled)).astype(np.int64)
+
+
+def leaf_clouds(dataset, npy_dict, plant, max_points=DEFAULT_CLOUD_POINTS):
+    """Per-date isolated plant clouds sampled for the 3D linker."""
+    p = int(plant)
+    out = {}
+    for date in dataset.dates:
+        path = _handlabel_path(dataset, p, date)
+        if not path.exists():
+            continue
+        data = npy_dict(path)
+        if not data:
+            continue
+        missing = [k for k in ("xyz_local", "otype", "leafid") if k not in data]
+        if missing:
+            raise KeyError(f"{path} missing {', '.join(missing)}")
+        xyz = np.asarray(data["xyz_local"], dtype=np.float32)
+        otype = np.asarray(data["otype"], dtype=np.uint8)
+        leafid = np.asarray(data["leafid"], dtype=np.int16)
+        if not (len(xyz) == len(otype) == len(leafid)):
+            raise ValueError(f"{path} has mismatched xyz/otype/leafid lengths")
+        sel = _stratified_cloud_indices(otype, leafid, max_points)
+        out[date] = {
+            "xyz": np.round(xyz[sel], 3).tolist(),
+            "otype": otype[sel].tolist(),
+            "leafid": leafid[sel].tolist(),
+            "full_count": int(len(xyz)),
+            "sample_count": int(len(sel)),
+            "source": str(path),
+        }
     return out
 
 
@@ -113,6 +212,21 @@ def save_chains(dataset, plant, chains):
 
 
 def register_link_routes(app, get_dataset, npy_dict):
+    @app.route("/link/clouds")
+    def link_clouds():
+        plant = request.args.get("plant", "01")
+        try:
+            max_points = int(request.args.get("max_points", DEFAULT_CLOUD_POINTS))
+        except (TypeError, ValueError):
+            return jsonify({"error": "max_points must be an integer"}), 400
+        max_points = max(1, min(MAX_CLOUD_POINTS, max_points))
+        try:
+            clouds = leaf_clouds(get_dataset(), npy_dict, plant, max_points=max_points)
+        except (OSError, KeyError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        dates = [d for d in get_dataset().dates if d in clouds]
+        return jsonify({"plant": f"{int(plant):02d}", "dates": dates, "clouds": clouds})
+
     @app.route("/link/leaves")
     def link_leaves():
         plant = request.args.get("plant", "01")
@@ -134,5 +248,8 @@ def register_link_routes(app, get_dataset, npy_dict):
     def link_save():
         data = request.get_json(silent=True) or {}
         plant = str(data.get("plant", "01"))
-        mp, n = save_chains(get_dataset(), plant, data.get("chains", []))
+        try:
+            mp, n = save_chains(get_dataset(), plant, data.get("chains", []))
+        except (OSError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
         return jsonify({"status": "saved", "path": str(mp), "n": n})
