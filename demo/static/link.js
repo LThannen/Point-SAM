@@ -343,7 +343,7 @@ function focusChain(i) {
 // ---------- load + save ----------
 async function loadData(fresh = false) {
   state.plant = currentPlant(); state.loadedPlant = state.plant;
-  const token = ++state.loadToken; setBusy(`Loading plant ${state.plant}…`); setStatus("");
+  const token = ++state.loadToken; setBusy(fresh ? `Auto-linking plant ${state.plant} (CPD, ~10s)…` : `Loading plant ${state.plant}…`); setStatus("");
   try {
     const [clouds, chains] = await Promise.all([
       fetchJson(`/link/clouds?plant=${encodeURIComponent(state.plant)}&max_points=${CLOUD_POINTS}`),
@@ -404,7 +404,7 @@ function ensurePanel() {
         <div class="lk-title"><b>LINK</b><select id="link-plant" class="lk-plant" title="plant"></select><span id="link-meta"></span></div>
         <div class="lk-actions">
           <button data-link-action="reload">Reload</button>
-          <button data-link-action="fresh">Reset to auto</button>
+          <button data-link-action="fresh" title="Run the automatic tracker + CPD arbiter (TrackPlant3D) — replaces current links with an auto draft to correct">⚡ Auto-link (CPD)</button>
           <button data-link-action="yaw-left">⟲</button>
           <button data-link-action="yaw-right">⟳</button>
           <button data-link-action="zoom-out">–</button>

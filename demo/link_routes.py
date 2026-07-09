@@ -171,7 +171,9 @@ def _manual_path(dataset, plant):
 def seed_chains(dataset, plant, fresh=False):
     """Chains to seed the UI: saved manual_chains.json if present (unless fresh),
     else the automatic relink tracker (best-effort), else []. Each =
-    {rank, obs:{date:leafid}}. fresh=True forces the automatic guess (ignore save)."""
+    {rank, obs:{date:leafid}}. fresh=True forces the automatic guess (ignore save)
+    and runs the CPD arbiter (TrackPlant3D-style) on the tracker's theft failures --
+    this is the one-click "Auto-link" draft, slower (~seconds) but a better start."""
     mp = _manual_path(dataset, plant)
     if mp.exists() and not fresh:
         try:
@@ -182,8 +184,8 @@ def seed_chains(dataset, plant, fresh=False):
         if RELINK_PATH not in sys.path:
             sys.path.insert(0, RELINK_PATH)
         import relink_leaf_identity as rl
-        chains, raw_to_pid = rl.build_persistent_ids()
-        brm = rl.biological_rank_map()
+        chains, raw_to_pid = rl.build_persistent_ids(arbitrate=fresh)
+        brm = rl.biological_rank_map(arbitrate=fresh)
         pid_rank = {}
         for (d, lid), r in brm.items():
             pid_rank[raw_to_pid[(d, lid)]] = r
