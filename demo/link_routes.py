@@ -15,13 +15,16 @@ dense/occluded plants.
 """
 import json
 import math
+import os
 import re
 import sys
 
 import numpy as np
 from flask import jsonify, request
 
-RELINK_PATH = "/home/lukas/pointr"          # optional: automatic seed source
+# where relink_leaf_identity.py + tree_compare.py live (automatic/CPD seed source);
+# override with POINTSAM_RELINK_PATH on machines where they aren't at /home/lukas/pointr.
+RELINK_PATH = os.environ.get("POINTSAM_RELINK_PATH", "/home/lukas/pointr")
 DEFAULT_CLOUD_POINTS = 50_000
 MAX_CLOUD_POINTS = 60_000
 
