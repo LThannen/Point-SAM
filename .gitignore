@@ -34,3 +34,6 @@ model_ts*.txt
 _darcs
 /pretrained
 demo/server.log
+
+# local machine-specific dataset picker list
+demo/datasets.txt

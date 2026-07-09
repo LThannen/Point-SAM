@@ -207,6 +207,17 @@ def _plots_under(root: Path) -> list[str]:
                 names.add(p.name)
     except OSError:
         pass
+    # Staged layout keeps raw scans under root/raw/PlotNN (that's where the staged
+    # branch of _resolve_dataset reads raw for ground-removal); detect those too so
+    # raw-only plots still list in the picker.
+    raw_root = root / "raw"
+    try:
+        if raw_root.exists():
+            for p in raw_root.glob("Plot*"):
+                if p.is_dir() and any(p.glob("*.las")):
+                    names.add(p.name)
+    except OSError:
+        pass
     if not names and (any(root.glob("*.las")) or (root / "base_centres.npy").exists()):
         names.add(root.name)
     return sorted(names)
@@ -1552,14 +1563,33 @@ def _reset_active_cloud():
     )
 
 
+def _pinned_dataset_roots():
+    """Curated dataset roots from demo/datasets.txt (one path per line, # comments).
+    When that file exists the picker shows EXACTLY these (plus the active one) -- a
+    clean, user-controlled list instead of every sibling folder of the active root,
+    and it works even when datasets live under different parent folders."""
+    f = Path(__file__).resolve().parent / "datasets.txt"
+    out = []
+    if f.exists():
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                p = Path(line).expanduser()
+                if p.exists():
+                    out.append(p.resolve())
+    return out
+
+
 def _dataset_options():
-    roots = [active_dataset.root]
-    if DEFAULT_DATASET_ROOT.exists():
-        roots.append(DEFAULT_DATASET_ROOT.resolve())
-    roots.append(LEGACY_PLANT_ROOT.resolve())
-    parent = args.datasets_parent or active_dataset.root.parent
-    if parent.exists():
-        roots.extend(p.resolve() for p in parent.iterdir() if p.is_dir())
+    pinned = _pinned_dataset_roots()
+    roots = [active_dataset.root, *pinned]
+    if not pinned:                                   # no curated list -> auto-discover
+        if DEFAULT_DATASET_ROOT.exists():
+            roots.append(DEFAULT_DATASET_ROOT.resolve())
+        roots.append(LEGACY_PLANT_ROOT.resolve())
+        parent = args.datasets_parent or active_dataset.root.parent
+        if parent.exists():
+            roots.extend(p.resolve() for p in parent.iterdir() if p.is_dir())
     seen = set()
     out = []
     for root in roots:
@@ -1570,6 +1600,11 @@ def _dataset_options():
         try:
             ds = _resolve_dataset(root, None)
         except (OSError, RuntimeError, ValueError):
+            continue
+        # Only list folders that actually hold scan data: the parent scan turns up
+        # every sibling dir (venv, tool repos, output dumps) and those resolve with
+        # no dates -- pure noise in the picker. Always keep the active one visible.
+        if not ds.dates and ds.root != active_dataset.root:
             continue
         out.append(
             {
