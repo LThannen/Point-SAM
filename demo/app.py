@@ -793,7 +793,7 @@ def _load_saved_separation(date, n):
     return plant_id, str(path)
 
 
-def _load_row_veg(date, seed_auto=True, n_target=None):
+def _load_row_veg(date, seed_auto=True, n_target=None, raw=False):
     n_target = int(args.n if n_target is None else n_target)
     path = _row_veg_path(date)
     o = np.load(path, allow_pickle=True).item()
@@ -813,10 +813,14 @@ def _load_row_veg(date, seed_auto=True, n_target=None):
     xyz_utm = xyz_utm[sel]
     xyz_local = xyz_local[sel]
     height = (xyz_local[:, 2] - xyz_local[:, 2].min()).astype(np.float32) / 100.0
-    plant_id, loaded_from = _load_saved_separation(date, len(xyz_utm))
-    if plant_id is None:
-        plant_id = _seed_plant_ids_from_auto(xyz_utm, date) if seed_auto else np.full(len(xyz_utm), -1, dtype=np.int16)
-        loaded_from = "auto" if seed_auto else None
+    if raw:
+        # raw=True ignores any saved separation; show the bare ground-removed cloud.
+        plant_id, loaded_from = np.full(len(xyz_utm), -1, dtype=np.int16), None
+    else:
+        plant_id, loaded_from = _load_saved_separation(date, len(xyz_utm))
+        if plant_id is None:
+            plant_id = _seed_plant_ids_from_auto(xyz_utm, date) if seed_auto else np.full(len(xyz_utm), -1, dtype=np.int16)
+            loaded_from = "auto" if seed_auto else None
     display_rgb = _plant_palette(plant_id)
     _set_active_cloud(
         date,
@@ -948,25 +952,64 @@ def _load_handlabel_geometry(hand_path):
     return xl, xu, ot, lf
 
 
-def _load_plant(plant, date, n_target=None):
+def _overlay_labels_on_raw(hand_path, xyz_utm, radius_m=0.01):
+    """Carry saved stem/leaf labels onto the FULL raw plant cloud by nearest-UTM match.
+
+    The handlabel is a SUBSET of the on-disk raw cloud (neighbour + missed-leaf points
+    were dropped while labelling), so reloading it alone can't reveal a leaf that never
+    got captured. This transfers the existing otype/leafid onto the full raw cloud so the
+    dropped points reappear UNLABELED (paintable) over the already-labelled ones -- i.e.
+    fine-tune existing labels against the raw data without redoing the plant. A raw point
+    only inherits a label from a labelled point within radius_m (so a genuinely missed
+    leaf, cm-separated from any label, stays unlabelled). Unmatched -> 0.
+    Returns (otype, leafid, loaded_from)."""
+    n = len(xyz_utm)
+    g = _load_handlabel_geometry(hand_path)
+    if g is None:
+        return np.zeros(n, dtype=np.uint8), np.zeros(n, dtype=np.int16), None
+    _, hu, hot, hlf = g
+    keep = hot > 0                                   # only carry real stem/leaf labels
+    otype = np.zeros(n, dtype=np.uint8)
+    leafid = np.zeros(n, dtype=np.int16)
+    if keep.any():
+        dist, idx = cKDTree(hu[keep]).query(xyz_utm, k=1, workers=-1)
+        m = dist < radius_m
+        otype[m] = hot[keep][idx[m]]
+        leafid[m] = hlf[keep][idx[m]]
+    return otype, leafid, str(hand_path)
+
+
+def _load_plant(plant, date, n_target=None, raw=False):
     n_target = int(args.n if n_target is None else n_target)
     pdir, local_path, utm_path, hand_path = _plant_paths(plant, date)
     if not local_path.exists():
         raise FileNotFoundError(local_path)
     if not utm_path.exists():
         raise FileNotFoundError(f"{utm_path} missing; run separate_from_labels.py to emit UTM companions")
-    embedded = _load_handlabel_geometry(hand_path)
+    want_merge = isinstance(raw, str) and raw.lower() in ("merge", "overlay", "keep")
+    want_raw = want_merge or bool(raw)
+    embedded = None if want_raw else _load_handlabel_geometry(hand_path)
     if embedded is not None:
         xyz_local, xyz_utm, otype, leafid = embedded
         xyz_local = xyz_local.astype(np.float32)
         xyz_utm = xyz_utm.astype(np.float64)
         loaded_from = str(hand_path)
     else:
+        # raw shows the full on-disk cloud (points deleted while labelling reappear).
+        # want_merge additionally overlays the saved labels so dropped/missed leaves come
+        # back UNLABELED over the labelled ones (fine-tune without redoing the plant).
         xyz_local = np.load(local_path).astype(np.float32)
         xyz_utm = np.load(utm_path).astype(np.float64)
         if xyz_utm.shape != xyz_local.shape:
             raise RuntimeError(f"{utm_path} shape {xyz_utm.shape} does not match {local_path} {xyz_local.shape}")
-        otype, leafid, loaded_from = _load_saved_leafstem(plant, date, len(xyz_local))
+        if want_merge:
+            otype, leafid, loaded_from = _overlay_labels_on_raw(hand_path, xyz_utm)
+        elif want_raw:
+            otype = np.zeros(len(xyz_local), dtype=np.uint8)
+            leafid = np.zeros(len(xyz_local), dtype=np.int16)
+            loaded_from = None
+        else:
+            otype, leafid, loaded_from = _load_saved_leafstem(plant, date, len(xyz_local))
     full_count = len(xyz_local)
     sel = _sample_indices(full_count, n_target)
     xyz_local = xyz_local[sel]
@@ -1103,6 +1146,9 @@ def _cloud_payload():
     payload = {
         **_status_payload(),
         "xyz": state["xyz_norm"].reshape(-1).tolist(),
+        # per-point height (cm above the cloud's base) so client tools can height-gate;
+        # the viewer buffer itself is normalized xyz_norm, which is NOT in cm.
+        "height_cm": (np.asarray(state["height"], dtype=float) * 100.0).round(1).tolist(),
         "rgb": (
             _plant_display_rgb(state["otype"], state["leafid"])
             if state["mode"] == "plant"
@@ -1328,7 +1374,7 @@ def _write_leafstem_qc(pdir, plant, date):
 
 
 def _append_leafstem_manifest(pdir, plant, date):
-    LEAFSTEM_active_dataset.label_root.mkdir(parents=True, exist_ok=True)
+    active_dataset.leafstem_root.mkdir(parents=True, exist_ok=True)
     path = active_dataset.leafstem_root / "manifest.csv"
     row = {
         "plot": active_dataset.plot,
@@ -1622,7 +1668,7 @@ def load_plant_server():
     if 0 < n_target < 2048:
         return jsonify({"error": "density must be 0 for full resolution or at least 2048 points"}), 400
     try:
-        loaded_from = _load_plant(plant, date, n_target=n_target)
+        loaded_from = _load_plant(plant, date, n_target=n_target, raw=data.get("raw", False))
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc), "plants": list(_available_plants()), "dates": list(active_dataset.dates)}), 400
     payload = _cloud_payload()
@@ -1639,7 +1685,7 @@ def load_row_veg_server():
     if 0 < n_target < 2048:
         return jsonify({"error": "density must be 0 for full resolution or at least 2048 points"}), 400
     try:
-        loaded_from = _load_row_veg(date, seed_auto=seed_auto, n_target=n_target)
+        loaded_from = _load_row_veg(date, seed_auto=seed_auto, n_target=n_target, raw=bool(data.get("raw", False)))
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc), "dates": list(active_dataset.dates)}), 400
     payload = _cloud_payload()
@@ -1843,21 +1889,18 @@ def reset_crop():
     return jsonify({"status": "crop_reset", **_cloud_payload()})
 
 
-def _apply_mask_priors(mask, active_label, use_height_prior, height_threshold, flood_points, prompt_point):
+def _apply_mask_priors(mask, active_label, use_height_prior, height_threshold, flood_points, prompt_point, height_above=False):
     """Apply optional height-prior + local-flood post-filters to a full-res mask.
 
     Returns (mask, meta) where meta carries the per-mask filter counts. Operates
-    on a copy so candidate masks stay independent.
+    on a copy so candidate masks stay independent. The height prior uses an explicit
+    direction (height_above) shared with every other tool, not the label semantics.
     """
     mask = mask.copy()
     height_removed = 0
-    if use_height_prior and active_label == 1:
+    if use_height_prior:
         before = int(mask.sum())
-        mask &= state["height"] >= height_threshold
-        height_removed = before - int(mask.sum())
-    elif use_height_prior and active_label == 2:
-        before = int(mask.sum())
-        mask &= state["height"] < height_threshold
+        mask &= (state["height"] >= height_threshold) if height_above else (state["height"] < height_threshold)
         height_removed = before - int(mask.sum())
     flood_dropped = 0
     flood_kept = 0
@@ -1884,6 +1927,7 @@ def segment():
     use_label_context = bool(data.get("use_label_context", False))
     use_height_prior = bool(data.get("use_height_prior", args.use_height_prior))
     height_threshold = float(data.get("height_threshold", args.plant_height_threshold))
+    height_above = bool(data.get("height_above", False))
     flood_points = int(data.get("flood_points", 0) or 0)
 
     state["prompt_coords"].append(prompt_point)
@@ -1917,7 +1961,8 @@ def segment():
         model_mask = (masks[0, j] > 0).detach().cpu().numpy()[:model_count]
         full = model_mask if nn_idx is None else model_mask[nn_idx]
         full, meta = _apply_mask_priors(
-            full, active_label, use_height_prior, height_threshold, flood_points, prompt_point
+            full, active_label, use_height_prior, height_threshold, flood_points, prompt_point,
+            height_above=height_above,
         )
         candidates.append(full)
         metas.append(meta)
@@ -2258,6 +2303,10 @@ def export():
         payload["fullres_dropped_count"] = 0
     print(f"export {payload}", flush=True)
     return jsonify(payload)
+
+
+from link_routes import register_link_routes  # noqa: E402
+register_link_routes(app, lambda: active_dataset, _npy_dict)
 
 
 if __name__ == "__main__":

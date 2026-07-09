@@ -29,6 +29,7 @@ let previewContext = null;
 let persistentLabels = [];
 let persistentOtype = [];
 let persistentLeafid = [];
+let persistentHeightCm = [];   // per-point height (cm above cloud base) for the height filter
 let persistentPlantId = [];
 let allDates = [];
 let earlyDates = [];
@@ -159,6 +160,7 @@ function ingestLabels(data) {
   if (data.labels) persistentLabels = data.labels;
   if (data.otype) persistentOtype = data.otype;
   if (data.leafid) persistentLeafid = data.leafid;
+  if (data.height_cm) persistentHeightCm = data.height_cm;   // present on cloud loads/deletes, not on assign
   if (data.plant_id) persistentPlantId = data.plant_id;
 }
 
@@ -285,8 +287,8 @@ function updateModeVisibility() {
 function populateDateSelect(preferredDate = null) {
   const dateSelect = document.getElementById("date-select");
   if (!dateSelect) return;
-  const showAll = appMode !== "plant" || document.getElementById("plant-all-dates")?.checked;
-  const dates = appMode === "separation" ? (separationDates.length ? separationDates : allDates) : showAll ? allDates : earlyDates;
+  // Plant + row modes always show every date; only separation narrows to its own set.
+  const dates = appMode === "separation" ? (separationDates.length ? separationDates : allDates) : allDates;
   if (!dates.length) return;
   const fallback = appMode === "plant" || appMode === "separation" ? "230619" : preferredDate;
   const selected = dates.includes(preferredDate) ? preferredDate : dates.includes(fallback) ? fallback : dates[0];
@@ -677,6 +679,23 @@ function nearestPointAtCanvasPoint(canvasPt, maxPixels = 14) {
   return { index: bestIndex, point: clicked, dist: Math.sqrt(bestDist2) };
 }
 
+// Height filter shared by EVERY labeling tool (lasso, brush, delete, Smart Mask).
+// Uses persistentHeightCm[i] (cm above the cloud's base, from the server) — the viewer
+// buffer is normalized xyz_norm, NOT cm, so geometry z can't be used directly.
+// "below" keeps points under the threshold, "above" keeps >=.
+function heightGate(indices) {
+  const en = document.getElementById("height-filter-enabled");
+  if (!en || !en.checked || !indices.length) return indices;
+  if (!persistentHeightCm || !persistentHeightCm.length) return indices;   // no height data → don't guess
+  const cm = Number(document.getElementById("height-filter-cm").value);
+  const above = document.getElementById("height-filter-dir").value === "above";
+  const kept = indices.filter((i) => { const h = persistentHeightCm[i]; return above ? h >= cm : h < cm; });
+  if (kept.length !== indices.length) {
+    setStatus(`Height filter: ${kept.length.toLocaleString()} of ${indices.length.toLocaleString()} selected points ${above ? "above" : "below"} ${cm}cm`);
+  }
+  return kept;
+}
+
 async function assignIndices(indices) {
   if (!indices.length) {
     setStatus("No points selected");
@@ -757,6 +776,17 @@ async function deleteIndices(indices) {
   setStatus(`Deleted ${data.deleted.toLocaleString()} points`);
 }
 
+async function deleteUnlabeled() {
+  if (appMode !== "plant") { setStatus("Delete unlabeled is only available in plant mode"); return; }
+  const idx = [];
+  for (let i = 0; i < persistentOtype.length; i += 1) {
+    const ot = persistentOtype[i] || 0, lf = persistentLeafid[i] || 0;
+    if (!(ot === 1 || (ot === 2 && lf > 0))) idx.push(i);   // neither stem nor a real leaf
+  }
+  if (!idx.length) { setStatus("No unlabeled points to delete"); return; }
+  await deleteIndices(idx);
+}
+
 async function onSamClick(event) {
   const hit = nearestPointAtCanvasPoint(canvasPoint(event));
   if (!hit) {
@@ -776,8 +806,9 @@ async function onSamClick(event) {
       active_label: activeLabel,
       target: activeTarget,
       use_label_context: document.getElementById("sam-context-enabled")?.checked ?? false,
-      use_height_prior: document.getElementById("sam-height-enabled").checked,
-      height_threshold: Number(document.getElementById("sam-height-cm").value) / 100.0,
+      use_height_prior: document.getElementById("height-filter-enabled").checked,
+      height_threshold: Number(document.getElementById("height-filter-cm").value) / 100.0,
+      height_above: document.getElementById("height-filter-dir").value === "above",
       flood_points: Number(document.getElementById("sam-flood-points").value || 0),
     }),
   });
@@ -956,7 +987,7 @@ async function loadDate() {
   const response = await fetch(`/load_date/${date}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ n }),
+    body: JSON.stringify({ n, raw: document.getElementById("show-raw").checked }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -984,7 +1015,7 @@ async function loadRowVeg() {
   const response = await fetch("/load_row_veg", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ date, seed_auto: seedAuto, n }),
+    body: JSON.stringify({ date, seed_auto: seedAuto, n, raw: document.getElementById("show-raw").checked }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -1005,6 +1036,12 @@ async function loadRowVeg() {
   setStatus(`Loaded row vegetation ${date}: ${data.loaded_labels_from || "blank"}`);
 }
 
+// "merge" = full raw cloud with saved labels overlaid (recover dropped/missed leaves);
+// true = full raw, labels wiped; false = saved handlabel subset.
+function rawMode() {
+  if (document.getElementById("raw-keep-labels")?.checked) return "merge";
+  return document.getElementById("show-raw").checked;
+}
 async function loadPlant() {
   const date = document.getElementById("date-select").value;
   const plant = document.getElementById("plant-select").value;
@@ -1014,7 +1051,7 @@ async function loadPlant() {
   const response = await fetch("/load_plant", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ plant_id: plant, date, n }),
+    body: JSON.stringify({ plant_id: plant, date, n, raw: rawMode() }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -1110,7 +1147,6 @@ function bindButtons(initialData) {
   document.getElementById("density-select").value = String(initialData.n_target || initialData.n);
   dateSelect.onchange = () => appMode === "plant" ? loadPlant() : appMode === "separation" ? loadRowVeg() : loadDate();
   document.getElementById("density-select").onchange = () => appMode === "plant" ? loadPlant() : appMode === "separation" ? loadRowVeg() : loadDate();
-  document.getElementById("plant-all-dates").onchange = () => populateDateSelect(dateSelect.value);
   document.getElementById("load-row-veg").onclick = loadRowVeg;
   document.getElementById("target-new-plant").onclick = () => {
     activeTarget = { kind: "new_plant" };
@@ -1127,6 +1163,7 @@ function bindButtons(initialData) {
   document.getElementById("plot-select").onchange = (e) => setDataset(e.target.value);
   document.getElementById("mode-select").onchange = (event) => switchMode(event.target.value);
   document.getElementById("load-plant").onclick = loadPlant;
+  document.getElementById("raw-keep-labels").onchange = () => { if (appMode === "plant") loadPlant(); };
   document.getElementById("prev-plant").onclick = () => stepPlant(-1);
   document.getElementById("next-plant").onclick = () => stepPlant(1);
   document.getElementById("target-stem").onclick = () => {
@@ -1145,6 +1182,7 @@ function bindButtons(initialData) {
     syncTargetButtons();
   };
   document.getElementById("renumber-leaves").onclick = renumberLeaves;
+  document.getElementById("delete-unlabeled").onclick = deleteUnlabeled;
 
   document.getElementById("tool-brush").onclick = () => setToolMode("brush");
   document.getElementById("tool-lasso").onclick = () => setToolMode("lasso");
@@ -1203,11 +1241,11 @@ function bindCanvasEvents() {
     const indices = toolMode === "brush" ? selectedIndicesFromBrushStroke() : selectedIndicesFromDrawnShape();
     clearOverlay();
     if (toolMode === "crop") {
-      await cropToIndices(indices);
+      await cropToIndices(indices);                 // crop is spatial framing, not labeling — ungated
     } else if (toolMode === "delete") {
-      await deleteIndices(indices);
+      await deleteIndices(heightGate(indices));
     } else {
-      await assignIndices(indices);
+      await assignIndices(heightGate(indices));
     }
   });
 

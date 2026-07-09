@@ -50,6 +50,10 @@
                 <option value="separation">Plant separation (ground removed)</option>
                 <option value="plant">Per-plant leaf/stem</option>
             </select>
+            <label class="check-row">
+                <input type="checkbox" id="show-raw">
+                show raw (ignore saved labels)
+            </label>
             <div id="separation-controls" class="separation-only">
                 <label class="check-row">
                     <input type="checkbox" id="seed-auto-separation" checked>
@@ -62,16 +66,16 @@
                 <div id="plant-list"></div>
             </div>
             <div id="plant-controls" class="plant-only">
-                <label class="check-row">
-                    <input type="checkbox" id="plant-all-dates" checked>
-                    show all dates
-                </label>
                 <label for="plant-select">Plant</label>
                 <select id="plant-select"></select>
                 <div class="button-row">
                     <button id="prev-plant">Prev</button>
                     <button id="next-plant">Next</button>
                 </div>
+                <label class="check-row" title="Reload the full raw plant cloud with your saved labels overlaid, so leaves that were dropped/missed reappear unlabeled and paintable. Add them, then Export.">
+                    <input type="checkbox" id="raw-keep-labels">
+                    + recover dropped raw points (keep labels)
+                </label>
                 <button id="load-plant">Load plant</button>
             </div>
 
@@ -90,6 +94,18 @@
             </select>
             <div class="hint">Left click/drag paints. Middle drag rotates. Right drag pans. Wheel zooms.</div>
 
+            <div class="group-title">Height filter</div>
+            <label class="check-row">
+                <input type="checkbox" id="height-filter-enabled">
+                gate every tool by height
+            </label>
+            <label for="height-filter-cm">threshold cm (above plant base)</label>
+            <input id="height-filter-cm" type="number" min="0" max="300" step="1" value="10">
+            <select id="height-filter-dir">
+                <option value="below" selected>affect points BELOW threshold</option>
+                <option value="above">affect points ABOVE threshold</option>
+            </select>
+
             <div class="group-title">Paint Colour</div>
             <button id="class-plant">Plant / Stem</button>
             <button id="class-ground">Ground / Leaf</button>
@@ -101,6 +117,7 @@
                 <button id="target-new-leaf">New leaf</button>
                 <button id="target-eraser">Eraser</button>
                 <button id="renumber-leaves">Renumber by height</button>
+                <button id="delete-unlabeled" title="Remove every point that is not stem and not an assigned leaf (the leftover raw/neighbour points), in one click. Undoable.">Delete unlabeled</button>
                 <div id="leaf-list"></div>
             </div>
 
@@ -108,12 +125,7 @@
             <div class="hint">Include/exclude clicks preview a mask. Enter accepts. Esc cancels.</div>
             <button id="annotate-positive">Include Click</button>
             <button id="annotate-negative">Exclude Click</button>
-            <label class="check-row">
-                <input type="checkbox" id="sam-height-enabled">
-                use height filter
-            </label>
-            <label for="sam-height-cm">height filter cm</label>
-            <input id="sam-height-cm" type="number" min="0" max="200" step="1" value="5">
+            <div class="hint">Smart Mask also respects the Height filter above.</div>
             <label for="sam-flood-points">local flood points</label>
             <input id="sam-flood-points" type="number" min="0" max="5000" step="25" value="0">
             <label for="sam-policy-plant">existing Plant</label>
@@ -175,6 +187,7 @@
     </div>
 </div>
 <script type="module" src="/static/annotate.js"></script>
+<script type="module" src="/static/link.js"></script>
 </body>
 
 </html>
