@@ -705,9 +705,34 @@ def _restore_cloud_snapshot(snapshot, undo_stack):
     state["undo"] = undo_stack
 
 
-def _load_date(date, n_target=None):
+def _load_date(date, n_target=None, raw=False):
     n_target = int(n_target or args.n)
     start = time.time()
+    if not raw:
+        try:
+            saved_path = _row_veg_path(date)
+        except FileNotFoundError:
+            saved_path = None
+        if saved_path is not None:
+            saved = _npy_dict(saved_path)
+            if saved is None or "xyz_utm" not in saved:
+                raise ValueError(f"invalid saved labels: {saved_path}")
+            xyz_utm = np.asarray(saved["xyz_utm"], dtype=np.float64)
+            labels = np.asarray(saved.get("label", np.ones(len(xyz_utm))), dtype=np.uint8)
+            if len(labels) != len(xyz_utm):
+                raise ValueError(f"saved labels do not match points: {saved_path}")
+            sel = _sample_indices(len(xyz_utm), n_target)
+            xyz_utm, labels = xyz_utm[sel], labels[sel]
+            height = (xyz_utm[:, 2] - xyz_utm[:, 2].min()).astype(np.float32)
+            display_rgb = cm.viridis(height / (np.ptp(height) + 1e-9))[:, :3].astype(np.float32)
+            _set_active_cloud(
+                date, _raw_path(date), xyz_utm, height, display_rgb,
+                int(saved.get("row_count", len(xyz_utm))), n_target,
+                loaded_labels_from=str(saved_path),
+            )
+            state["labels"] = labels
+            print(f"date reload completed from saved labels in {time.time() - start:.1f}s", flush=True)
+            return
     raw_path, xyz_utm, height, display_rgb, row_count = _load_row_sample(date, n_target)
     _set_active_cloud(date, raw_path, xyz_utm, height, display_rgb, row_count, n_target)
     print(f"date reload completed in {time.time() - start:.1f}s", flush=True)
@@ -1688,7 +1713,7 @@ def load_date_server(date):
     if 0 < n_target < 2048:
         return jsonify({"error": "density must be 0 for full resolution or at least 2048 points"}), 400
     try:
-        _load_date(date, n_target)
+        _load_date(date, n_target, raw=bool(data.get("raw", False)))
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc), "dates": list(active_dataset.dates)}), 400
     return jsonify(_cloud_payload())

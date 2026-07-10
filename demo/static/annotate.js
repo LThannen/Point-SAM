@@ -1162,6 +1162,7 @@ function bindButtons(initialData) {
   document.getElementById("set-dataset").onclick = () => setDataset();
   document.getElementById("plot-select").onchange = (e) => setDataset(e.target.value);
   document.getElementById("mode-select").onchange = (event) => switchMode(event.target.value);
+  document.getElementById("show-raw").onchange = () => appMode === "plant" ? loadPlant() : appMode === "separation" ? loadRowVeg() : loadDate();
   document.getElementById("load-plant").onclick = loadPlant;
   document.getElementById("raw-keep-labels").onchange = () => { if (appMode === "plant") loadPlant(); };
   document.getElementById("prev-plant").onclick = () => stepPlant(-1);
