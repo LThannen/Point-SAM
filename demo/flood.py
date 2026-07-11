@@ -36,3 +36,4 @@ if __name__ == "__main__":
     points = np.array([[0, 0, 0], [0.4, 0, 0], [0.8, 0, 0], [3, 0, 0]])
     assert flood_indices(points, 0, 0.5, 10).tolist() == [0, 1, 2]
     assert flood_indices(points, 0, 0.5, 2).tolist() == [0, 1]
+    assert flood_indices(points, 0, 0.5, 10, [True, False, True, True]).tolist() == [0]

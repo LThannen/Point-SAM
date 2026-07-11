@@ -86,6 +86,10 @@
             <input id="flood-distance" class="separation-only" type="number" min="0.01" max="100" step="0.1" value="1">
             <label for="flood-points" class="separation-only">Flood point limit</label>
             <input id="flood-points" class="separation-only" type="number" min="1" max="100000" step="100" value="5000">
+            <label class="check-row separation-only">
+                <input type="checkbox" id="flood-protect-existing" checked>
+                protect existing labels
+            </label>
             <button id="tool-lasso">Lasso Paint</button>
             <button id="tool-crop" class="row-only">Crop Box</button>
             <button id="tool-delete">Delete Points</button>

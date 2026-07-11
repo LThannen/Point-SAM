@@ -739,6 +739,7 @@ async function onFloodClick(event) {
       seed_index: hit.index,
       distance_cm: Number(document.getElementById("flood-distance").value),
       max_points: Number(document.getElementById("flood-points").value),
+      protect_existing: document.getElementById("flood-protect-existing").checked,
       ghosted_plant_ids: Array.from(ghostedPlantIds),
       height_filter: document.getElementById("height-filter-enabled").checked,
       height_cm: Number(document.getElementById("height-filter-cm").value),

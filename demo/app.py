@@ -1874,10 +1874,18 @@ def point_flood():
     if data.get("height_filter"):
         threshold = float(data.get("height_cm", 0)) / 100.0
         allowed &= state["height"] >= threshold if data.get("height_above") else state["height"] < threshold
+    protect_existing = bool(data.get("protect_existing", True))
+    if protect_existing:
+        seed_allowed = 0 <= seed < len(allowed) and allowed[seed]
+        allowed &= state["plant_id"] < 0
+        if seed_allowed:
+            allowed[seed] = True
 
     idx = flood_indices(state["xyz_local"], seed, distance_cm, max_points, allowed)
+    if protect_existing:
+        idx = idx[state["plant_id"][idx] < 0]
     if len(idx) == 0:
-        return jsonify({"error": "seed point is outside the active filters"}), 400
+        return jsonify({"error": "no unassigned points reached inside the active filters"}), 400
     return jsonify({"indices": idx.tolist(), "count": int(len(idx))})
 
 
