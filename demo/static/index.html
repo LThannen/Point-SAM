@@ -64,6 +64,12 @@
                 <button id="target-new-plant">New plant</button>
                 <button id="target-unassign">Unassign</button>
                 <div id="plant-list"></div>
+                <div class="group-title">Cross-date Identity</div>
+                <label for="identity-distance">Maximum base drift (cm)</label>
+                <input id="identity-distance" type="number" min="1" max="100" step="1" value="30">
+                <button id="identity-preview">Preview identity sorting</button>
+                <button id="identity-apply" disabled>Apply identity sorting</button>
+                <div class="hint">Uses the selected date as the trusted ID reference. Apply creates a full backup.</div>
             </div>
             <div id="plant-controls" class="plant-only">
                 <label for="plant-select">Plant</label>
@@ -94,6 +100,10 @@
             <button id="tool-crop" class="row-only">Crop Box</button>
             <button id="tool-delete">Delete Points</button>
             <button id="delete-unlabeled" title="Remove every currently unlabeled point. Undoable.">Delete unlabeled</button>
+            <label class="check-row">
+                <input type="checkbox" id="ghost-unlabeled">
+                ghost unlabeled points
+            </label>
             <button id="tool-sam">Smart Mask</button>
             <label for="brush-size">Brush size</label>
             <select id="brush-size">

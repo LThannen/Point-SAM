@@ -35,6 +35,7 @@ let allDates = [];
 let earlyDates = [];
 let separationDates = [];
 let ghostedPlantIds = new Set();
+let identityPreview = null;
 let drawPoints = [];
 let isDrawing = false;
 
@@ -82,8 +83,17 @@ function isGhostedPlantId(pid) {
   return appMode === "separation" && Number.isInteger(pid) && ghostedPlantIds.has(pid);
 }
 
+function isUnlabeledIndex(index) {
+  return appMode === "separation"
+    ? persistentPlantId[index] < 0
+    : appMode === "plant"
+    ? persistentOtype[index] !== 1 && !(persistentOtype[index] === 2 && persistentLeafid[index] > 0)
+    : !persistentLabels[index];
+}
+
 function isSelectableIndex(index) {
-  return !(appMode === "separation" && isGhostedPlantId(persistentPlantId[index]));
+  return !(document.getElementById("ghost-unlabeled")?.checked && isUnlabeledIndex(index))
+    && !(appMode === "separation" && isGhostedPlantId(persistentPlantId[index]));
 }
 
 function plantPointColor(i) {
@@ -132,9 +142,18 @@ function updateCounts(meta) {
     document.getElementById("sample-info").textContent =
       `${meta.date} row vegetation: ${meta.n.toLocaleString()} points${fullText}`;
     const newPlantBtn = document.getElementById("target-new-plant");
-    if (newPlantBtn && Number.isInteger(meta.next_plant_id)) {
-      newPlantBtn.textContent = `New plant ${meta.next_plant_id}`;
+    if (newPlantBtn) {
+      newPlantBtn.disabled = Boolean(meta.identity_locked);
+      newPlantBtn.textContent = meta.identity_locked
+        ? "Identity locked"
+        : Number.isInteger(meta.next_plant_id)
+        ? `New plant ${meta.next_plant_id}`
+        : "New plant";
     }
+    const identityPreviewBtn = document.getElementById("identity-preview");
+    if (identityPreviewBtn) identityPreviewBtn.disabled = Boolean(meta.identity_locked);
+    const identityApplyBtn = document.getElementById("identity-apply");
+    if (identityApplyBtn && meta.identity_locked) identityApplyBtn.disabled = true;
     renderPlantList(meta.plant_instances || []);
   } else if (appMode === "plant") {
     document.getElementById("counts").textContent =
@@ -171,6 +190,10 @@ function repaint(data = null) {
   const colors = points.geometry.attributes.color;
 
   for (let i = 0; i < origin_colors.count; i++) {
+    if (document.getElementById("ghost-unlabeled")?.checked && isUnlabeledIndex(i)) {
+      colors.setXYZ(i, 0.9, 0.9, 0.9);
+      continue;
+    }
     if (appMode === "separation") {
       const pid = persistentPlantId[i];
       const c = pid >= 0 ? (isGhostedPlantId(pid) ? [0.87, 0.87, 0.87] : instanceColor(pid)) : [0.33, 0.33, 0.33];
@@ -203,7 +226,7 @@ function renderPreviewMask(seg, context = null) {
   if (!previewMask || !points) return;
   const colors = points.geometry.attributes.color;
   for (let i = 0; i < previewMask.length && i < origin_colors.count; i++) {
-    if (previewMask[i]) colors.setXYZ(i, 0.0, 0.95, 1.0);
+    if (previewMask[i] && isSelectableIndex(i)) colors.setXYZ(i, 0.0, 0.95, 1.0);
   }
   for (let j = 0; j < promptIndices.length; j++) {
     colors.setXYZ(promptIndices[j], promptLabels[j] > 0 ? 1 : 0, promptLabels[j] > 0 ? 1 : 0, 0);
@@ -320,14 +343,19 @@ function populatePlotSelect(plots = [], active = null) {
   sel.style.display = plots.length > 1 ? "" : "none";
 }
 
-function populatePlantSelect(plants = [], preferred = "06") {
+function populatePlantSelect(plants = [], preferred = "06", coverage = {}, continuous = []) {
   const plantSelect = document.getElementById("plant-select");
   if (!plantSelect) return;
   plantSelect.innerHTML = "";
+  const continuousIds = new Set(continuous.map(Number));
   for (const plant of plants) {
     const option = document.createElement("option");
     option.value = plant;
-    option.textContent = plant;
+    const dates = coverage[String(Number(plant))] || coverage[plant] || [];
+    const suffix = dates.length
+      ? ` · ${dates.length}/${allDates.length}${continuousIds.has(Number(plant)) ? " continuous" : ""}`
+      : "";
+    option.textContent = `Plant ${plant}${suffix}`;
     if (plant === preferred) option.selected = true;
     plantSelect.appendChild(option);
   }
@@ -338,7 +366,12 @@ function adoptDatasetMeta(data, preferredDate = null) {
   earlyDates = data.early_dates || allDates;
   separationDates = data.separation_dates || allDates;
   populateDateSelect(preferredDate || data.date);
-  populatePlantSelect(data.plants || [], document.getElementById("plant-select")?.value || "06");
+  populatePlantSelect(
+    data.plants || [],
+    document.getElementById("plant-select")?.value || "06",
+    data.plant_coverage || {},
+    data.continuous_plant_ids || [],
+  );
 }
 
 async function populateDatasetSelect() {
@@ -663,6 +696,7 @@ function nearestPointAtCanvasPoint(canvasPt, maxPixels = 14) {
   let bestDist2 = maxPixels * maxPixels;
 
   for (let i = 0; i < positions.count; i++) {
+    if (!isSelectableIndex(i)) continue;
     p.fromBufferAttribute(positions, i);
     p.project(camera);
     if (p.z < -1 || p.z > 1) continue;
@@ -726,6 +760,10 @@ async function assignIndices(indices) {
 }
 
 async function onFloodClick(event) {
+  if (document.getElementById("ghost-unlabeled").checked) {
+    setStatus("Point Flood is disabled while unlabeled points are ghosted");
+    return;
+  }
   const hit = nearestPointAtCanvasPoint(canvasPoint(event));
   if (!hit) {
     setStatus("No point under cursor");
@@ -811,18 +849,17 @@ async function deleteIndices(indices) {
 async function deleteUnlabeled() {
   const idx = [];
   for (let i = 0; i < points.geometry.attributes.position.count; i += 1) {
-    const unlabeled = appMode === "separation"
-      ? persistentPlantId[i] < 0
-      : appMode === "plant"
-      ? persistentOtype[i] !== 1 && !(persistentOtype[i] === 2 && persistentLeafid[i] > 0)
-      : !persistentLabels[i];
-    if (unlabeled) idx.push(i);
+    if (isUnlabeledIndex(i)) idx.push(i);
   }
   if (!idx.length) { setStatus("No unlabeled points to delete"); return; }
   await deleteIndices(idx);
 }
 
 async function onSamClick(event) {
+  if (document.getElementById("ghost-unlabeled").checked) {
+    setStatus("Smart Mask is disabled while unlabeled points are ghosted");
+    return;
+  }
   const hit = nearestPointAtCanvasPoint(canvasPoint(event));
   if (!hit) {
     setStatus("No point under cursor");
@@ -895,6 +932,10 @@ async function cycleMask(delta) {
 }
 
 async function commitMask(context = null) {
+  if (document.getElementById("ghost-unlabeled").checked) {
+    setStatus("Smart Mask cannot be accepted while unlabeled points are ghosted");
+    return;
+  }
   const response = await fetch("/commit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1162,6 +1203,54 @@ function stepPlant(delta) {
   loadPlant();
 }
 
+async function previewIdentitySorting() {
+  const referenceDate = document.getElementById("date-select").value;
+  const maxDistanceCm = Number(document.getElementById("identity-distance").value);
+  const response = await fetch("/identity_preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reference_date: referenceDate, max_distance_cm: maxDistanceCm }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    setStatus(data.error || "Identity preview failed");
+    return;
+  }
+  identityPreview = { referenceDate, maxDistanceCm };
+  document.getElementById("identity-apply").disabled = false;
+  setStatus(
+    `Preview: ${data.physical_plants} physical IDs, ${data.continuous_plants} continuous, ` +
+    `${data.new_or_removed_observations} unmatched observations, max accepted drift ${data.max_match_cm} cm`,
+  );
+}
+
+async function applyIdentitySorting() {
+  if (!identityPreview) return;
+  if (!window.confirm(
+    "Apply this mapping? A full backup is created first. Leaf/stem labels move with their physical point cloud.",
+  )) return;
+  setStatus("Applying identity sorting and backing up labels...");
+  const response = await fetch("/identity_apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      reference_date: identityPreview.referenceDate,
+      max_distance_cm: identityPreview.maxDistanceCm,
+      confirm: "APPLY",
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    setStatus(data.error || "Identity sorting failed");
+    return;
+  }
+  identityPreview = null;
+  document.getElementById("identity-apply").disabled = true;
+  adoptDatasetMeta(data, document.getElementById("date-select").value);
+  await loadRowVeg();
+  setStatus(`Identity sorting applied. Backup: ${data.backup}`);
+}
+
 async function switchMode(mode) {
   appMode = mode;
   updateModeVisibility();
@@ -1193,6 +1282,8 @@ function bindButtons(initialData) {
     activeLabel = 0;
     syncTargetButtons();
   };
+  document.getElementById("identity-preview").onclick = previewIdentitySorting;
+  document.getElementById("identity-apply").onclick = applyIdentitySorting;
 
   document.getElementById("set-dataset").onclick = () => setDataset();
   document.getElementById("plot-select").onchange = (e) => setDataset(e.target.value);
@@ -1219,6 +1310,10 @@ function bindButtons(initialData) {
   };
   document.getElementById("renumber-leaves").onclick = renumberLeaves;
   document.getElementById("delete-unlabeled").onclick = deleteUnlabeled;
+  document.getElementById("ghost-unlabeled").onchange = (event) => {
+    repaint();
+    setStatus(event.target.checked ? "Ghosted and protected unlabeled points" : "Unlabeled points active");
+  };
 
   document.getElementById("tool-brush").onclick = () => setToolMode("brush");
   document.getElementById("tool-flood").onclick = () => setToolMode("flood");

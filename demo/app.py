@@ -32,6 +32,7 @@ from laspy.vlrs.known import GeoKeyDirectoryVlr, GeoKeyEntryStruct
 from pc_sam.model.pc_sam import AuxInputs, repeat_interleave
 from pc_sam.utils.torch_utils import replace_with_fused_layernorm
 from flood import flood_indices
+from plant_identity import apply_identity_plan, preview_identity_plan
 
 
 POINTSAM_ROOT = Path(__file__).resolve().parents[1]
@@ -788,6 +789,11 @@ def _manual_sep_path(date):
     return _leafstem_label_dir() / f"plantsep_{active_dataset.plot}_{date}.npy"
 
 
+def _identity_config():
+    path = active_dataset.plant_root / "plant_identity.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
 def _base_markers_local():
     base_path = active_dataset.plant_root / "base_centres.npy"
     if not base_path.exists():
@@ -819,15 +825,24 @@ def _seed_plant_ids_from_auto(xyz_utm, date):
     return plant_id
 
 
-def _load_saved_separation(date, n):
+def _load_saved_separation(date, xyz_utm):
     path = _manual_sep_path(date)
     if not path.exists():
         return None, None
     o = np.load(path, allow_pickle=True).item()
     plant_id = np.asarray(o.get("plant_id", []), dtype=np.int16)
-    if len(plant_id) != n:
+    saved_xyz = np.asarray(o.get("xyz_utm", []), dtype=np.float64)
+    if len(plant_id) != len(saved_xyz) or len(saved_xyz) == 0:
         return None, None
-    return plant_id, str(path)
+    if len(plant_id) == len(xyz_utm) and np.array_equal(saved_xyz, xyz_utm):
+        return plant_id, str(path)
+    dist, idx = cKDTree(saved_xyz).query(xyz_utm, k=1, workers=-1)
+    matched = dist <= 1e-5
+    if not np.any(matched):
+        return None, None
+    remapped = np.full(len(xyz_utm), -1, dtype=np.int16)
+    remapped[matched] = plant_id[idx[matched]]
+    return remapped, f"{path} (UTM remap {int(matched.sum())}/{len(xyz_utm)})"
 
 
 def _load_row_veg(date, seed_auto=True, n_target=None, raw=False):
@@ -854,7 +869,7 @@ def _load_row_veg(date, seed_auto=True, n_target=None, raw=False):
         # raw=True ignores any saved separation; show the bare ground-removed cloud.
         plant_id, loaded_from = np.full(len(xyz_utm), -1, dtype=np.int16), None
     else:
-        plant_id, loaded_from = _load_saved_separation(date, len(xyz_utm))
+        plant_id, loaded_from = _load_saved_separation(date, xyz_utm)
         if plant_id is None:
             plant_id = _seed_plant_ids_from_auto(xyz_utm, date) if seed_auto else np.full(len(xyz_utm), -1, dtype=np.int16)
             loaded_from = "auto" if seed_auto else None
@@ -895,6 +910,9 @@ def _plant_paths(plant, date):
 
 
 def _available_plants():
+    identity = _identity_config()
+    if identity:
+        return tuple(f"{int(plant):02d}" for plant in identity["locked_plant_ids"])
     return active_dataset.plants
 
 
@@ -943,16 +961,19 @@ def _plant_id_counts():
     if state["plant_id"] is None:
         return []
     out = []
-    for pid in sorted(int(x) for x in np.unique(state["plant_id"]) if int(x) >= 0):
+    ids = {int(x) for x in np.unique(state["plant_id"]) if int(x) >= 0}
+    identity = _identity_config()
+    if identity:
+        ids.update(int(x) for x in identity["locked_plant_ids"])
+    for pid in sorted(ids):
         out.append({"id": pid, "points": int(np.sum(state["plant_id"] == pid))})
     return out
 
 
 def _separation_export_plants():
-    plants = set(range(BASE_PLANT_COUNT))
-    if state["plant_id"] is not None:
-        plants.update(int(x) for x in np.unique(state["plant_id"]) if int(x) >= 0)
-    return sorted(plants)
+    if state["plant_id"] is None:
+        return []
+    return sorted(int(x) for x in np.unique(state["plant_id"]) if int(x) >= 0)
 
 
 def _plant_display_rgb(otype, leafid):
@@ -1085,6 +1106,7 @@ def _ensure_loaded():
 
 
 def _unloaded_status_payload():
+    identity = _identity_config()
     return {
         "mode": state["mode"],
         "date": state["date"],
@@ -1104,6 +1126,9 @@ def _unloaded_status_payload():
         "leaves": [],
         "plant_instances": [],
         "next_plant_id": None,
+        "identity_locked": bool(identity),
+        "continuous_plant_ids": [] if not identity else identity.get("continuous_plant_ids", []),
+        "plant_coverage": {} if not identity else identity.get("coverage", {}),
         "stem_base": None,
         "base_markers": [],
         "loaded_labels_from": None,
@@ -1115,6 +1140,7 @@ def _unloaded_status_payload():
 
 def _status_payload():
     labels = state["labels"]
+    identity = _identity_config()
     stem_base = None
     next_plant_id = None
     if state["stem_base"] is not None and state["norm_shift"] is not None:
@@ -1133,7 +1159,7 @@ def _status_payload():
             "ground": 0,
         }
         existing = [int(x) for x in np.unique(plant_id) if int(x) >= 0]
-        next_plant_id = (max(existing) + 1) if existing else 0
+        next_plant_id = None if identity else ((max(existing) + 1) if existing else 0)
     elif state["mode"] == "plant":
         otype = state["otype"]
         counts = {
@@ -1168,6 +1194,9 @@ def _status_payload():
         "leaves": _leaf_counts() if state["mode"] == "plant" else [],
         "plant_instances": _plant_id_counts() if state["mode"] == "separation" else [],
         "next_plant_id": next_plant_id,
+        "identity_locked": bool(identity),
+        "continuous_plant_ids": [] if not identity else identity.get("continuous_plant_ids", []),
+        "plant_coverage": {} if not identity else identity.get("coverage", {}),
         "stem_base": stem_base,
         "base_markers": base_markers,
         "loaded_labels_from": state["loaded_labels_from"],
@@ -1218,6 +1247,8 @@ def _target_from_request(data):
         if target.get("kind") in ("eraser", "unassign") or label == 0:
             return "plant_id", -1
         if target.get("kind") == "new_plant":
+            if _identity_config():
+                raise ValueError("plant identity is locked; select an existing physical plant ID")
             existing = [int(x) for x in np.unique(state["plant_id"]) if int(x) >= 0]
             return "plant_id", (max(existing) + 1) if existing else 0
         if target.get("kind") == "plant":
@@ -1526,6 +1557,18 @@ def _export_manual_separation():
     backup_root, backed = _backup_current_separation(date)
     leaf_label_warnings = []
     exported_plants = _separation_export_plants()
+    identity = _identity_config()
+    known_plants = set(exported_plants)
+    if identity:
+        known_plants.update(int(x) for x in identity["locked_plant_ids"])
+    for plant in known_plants:
+        pdir = _plant_dir(plant)
+        for path in (
+            pdir / f"plant_{plant:02d}_{date}.npy",
+            pdir / f"plant_{plant:02d}_{date}_utm.npy",
+        ):
+            if path.exists():
+                path.unlink()
     for plant in exported_plants:
         pdir = _plant_dir(plant)
         pdir.mkdir(parents=True, exist_ok=True)
@@ -1676,6 +1719,7 @@ def set_dataset_server():
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc), "datasets": _dataset_options()}), 400
     _reset_active_cloud()
+    identity = _identity_config()
     return jsonify(
         {
             "status": "dataset_set",
@@ -1688,7 +1732,10 @@ def set_dataset_server():
             "dates": list(active_dataset.dates),
             "early_dates": list(active_dataset.early_dates),
             "separation_dates": list(active_dataset.separation_dates),
-            "plants": list(active_dataset.plants),
+            "plants": list(_available_plants()),
+            "identity_locked": bool(identity),
+            "continuous_plant_ids": [] if not identity else identity.get("continuous_plant_ids", []),
+            "plant_coverage": {} if not identity else identity.get("coverage", {}),
         }
     )
 
@@ -1752,6 +1799,82 @@ def load_row_veg_server():
     payload = _cloud_payload()
     payload["loaded_labels_from"] = loaded_from
     return jsonify(payload)
+
+
+@app.route("/identity_preview", methods=["POST"])
+def identity_preview_server():
+    data = request.get_json(silent=True) or {}
+    if _identity_config():
+        return jsonify({"error": "plant identity is already locked"}), 400
+    reference_date = str(data.get("reference_date", state["date"] or ""))
+    max_distance_m = float(data.get("max_distance_cm", 18.0)) / 100.0
+    try:
+        plan = preview_identity_plan(
+            active_dataset.plant_root,
+            active_dataset.plot,
+            reference_date,
+            max_distance_m,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    distances = [
+        distance
+        for values in plan["match_distance_m"].values()
+        for distance in values.values()
+        if distance is not None
+    ]
+    return jsonify(
+        {
+            "status": "identity_preview",
+            "reference_date": reference_date,
+            "physical_plants": len(plan["locked_plant_ids"]),
+            "continuous_plants": len(plan["continuous_plant_ids"]),
+            "max_match_cm": round(100.0 * max(distances, default=0.0), 1),
+            "new_or_removed_observations": sum(
+                distance is None
+                for date, values in plan["match_distance_m"].items()
+                if date != reference_date
+                for distance in values.values()
+            ),
+            "mapping": plan["source_id_to_canonical"],
+        }
+    )
+
+
+@app.route("/identity_apply", methods=["POST"])
+def identity_apply_server():
+    global active_dataset
+    data = request.get_json(silent=True) or {}
+    if data.get("confirm") != "APPLY":
+        return jsonify({"error": "identity apply requires explicit confirmation"}), 400
+    reference_date = str(data.get("reference_date", ""))
+    max_distance_m = float(data.get("max_distance_cm", 18.0)) / 100.0
+    try:
+        plan = preview_identity_plan(
+            active_dataset.plant_root,
+            active_dataset.plot,
+            reference_date,
+            max_distance_m,
+        )
+        backup = apply_identity_plan(
+            active_dataset.root,
+            active_dataset.plot,
+            plan,
+            active_dataset.epsg,
+        )
+        active_dataset = _resolve_dataset(active_dataset.root, active_dataset.plot)
+        _reset_active_cloud()
+    except (FileNotFoundError, RuntimeError, ValueError, OSError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(
+        {
+            "status": "identity_applied",
+            "backup": str(backup),
+            "physical_plants": len(plan["locked_plant_ids"]),
+            "continuous_plants": len(plan["continuous_plant_ids"]),
+            **_unloaded_status_payload(),
+        }
+    )
 
 
 @app.route("/renumber_leaves", methods=["POST"])
