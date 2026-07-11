@@ -280,6 +280,7 @@ function updateModeVisibility() {
   if ((appMode === "plant" || appMode === "separation") && toolMode === "crop") {
     setToolMode("brush");
   }
+  if (appMode !== "separation" && toolMode === "flood") setToolMode("brush");
   document.getElementById("export-labels").textContent = appMode === "plant" ? "Export plant" : appMode === "separation" ? "Export separation" : "Export";
   populateDateSelect(document.getElementById("date-select").value);
 }
@@ -512,7 +513,7 @@ function setSamHelp(show) {
 
 function setToolMode(mode) {
   toolMode = mode;
-  for (const id of ["tool-brush", "tool-lasso", "tool-sam", "tool-crop", "tool-delete"]) {
+  for (const id of ["tool-brush", "tool-flood", "tool-lasso", "tool-sam", "tool-crop", "tool-delete"]) {
     document.getElementById(id).classList.remove("active");
   }
   document.getElementById(`tool-${mode}`).classList.add("active");
@@ -520,6 +521,8 @@ function setToolMode(mode) {
   setStatus(
     mode === "brush"
       ? "Brush: click or drag over points to paint the active class"
+      : mode === "flood"
+      ? "Point Flood: click a seed to paint connected neighbours up to the distance and point limits"
       : mode === "lasso"
       ? "Lasso: drag around points to paint the active class"
       : mode === "crop"
@@ -722,6 +725,34 @@ async function assignIndices(indices) {
   setStatus(`Painted ${data.changed.toLocaleString()} points as ${targetDisplayName(data)}`);
 }
 
+async function onFloodClick(event) {
+  const hit = nearestPointAtCanvasPoint(canvasPoint(event));
+  if (!hit) {
+    setStatus("No point under cursor");
+    return;
+  }
+  setStatus("Flooding from seed point...");
+  const response = await fetch("/point_flood", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      seed_index: hit.index,
+      distance_cm: Number(document.getElementById("flood-distance").value),
+      max_points: Number(document.getElementById("flood-points").value),
+      ghosted_plant_ids: Array.from(ghostedPlantIds),
+      height_filter: document.getElementById("height-filter-enabled").checked,
+      height_cm: Number(document.getElementById("height-filter-cm").value),
+      height_above: document.getElementById("height-filter-dir").value === "above",
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    setStatus(data.error || "Point flood failed");
+    return;
+  }
+  await assignIndices(data.indices);
+}
+
 async function cropToIndices(indices) {
   if (!indices.length) {
     setStatus("No points selected for crop");
@@ -777,11 +808,14 @@ async function deleteIndices(indices) {
 }
 
 async function deleteUnlabeled() {
-  if (appMode !== "plant") { setStatus("Delete unlabeled is only available in plant mode"); return; }
   const idx = [];
-  for (let i = 0; i < persistentOtype.length; i += 1) {
-    const ot = persistentOtype[i] || 0, lf = persistentLeafid[i] || 0;
-    if (!(ot === 1 || (ot === 2 && lf > 0))) idx.push(i);   // neither stem nor a real leaf
+  for (let i = 0; i < points.geometry.attributes.position.count; i += 1) {
+    const unlabeled = appMode === "separation"
+      ? persistentPlantId[i] < 0
+      : appMode === "plant"
+      ? persistentOtype[i] !== 1 && !(persistentOtype[i] === 2 && persistentLeafid[i] > 0)
+      : !persistentLabels[i];
+    if (unlabeled) idx.push(i);
   }
   if (!idx.length) { setStatus("No unlabeled points to delete"); return; }
   await deleteIndices(idx);
@@ -1186,6 +1220,7 @@ function bindButtons(initialData) {
   document.getElementById("delete-unlabeled").onclick = deleteUnlabeled;
 
   document.getElementById("tool-brush").onclick = () => setToolMode("brush");
+  document.getElementById("tool-flood").onclick = () => setToolMode("flood");
   document.getElementById("tool-lasso").onclick = () => setToolMode("lasso");
   document.getElementById("tool-sam").onclick = () => setToolMode("sam");
   document.getElementById("sam-help-close").onclick = () => setSamHelp(false);
@@ -1211,6 +1246,10 @@ function bindCanvasEvents() {
     event.preventDefault();
     if (toolMode === "sam") {
       await onSamClick(event);
+      return;
+    }
+    if (toolMode === "flood") {
+      await onFloodClick(event);
       return;
     }
     isDrawing = true;

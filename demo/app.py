@@ -31,6 +31,7 @@ from laspy.vlrs.known import GeoKeyDirectoryVlr, GeoKeyEntryStruct
 
 from pc_sam.model.pc_sam import AuxInputs, repeat_interleave
 from pc_sam.utils.torch_utils import replace_with_fused_layernorm
+from flood import flood_indices
 
 
 POINTSAM_ROOT = Path(__file__).resolve().parents[1]
@@ -1849,6 +1850,35 @@ def assign_indices():
             **_status_payload(),
         }
     )
+
+
+@app.route("/point_flood", methods=["POST"])
+def point_flood():
+    _ensure_loaded()
+    if state["mode"] != "separation":
+        return jsonify({"error": "point flood is only available in plant separation mode"}), 400
+    data = request.get_json(silent=True) or {}
+    try:
+        seed = int(data.get("seed_index", -1))
+        distance_cm = float(data.get("distance_cm", 1.0))
+        max_points = int(data.get("max_points", 5000))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid point flood settings"}), 400
+    if not 0.01 <= distance_cm <= 100 or not 1 <= max_points <= 100_000:
+        return jsonify({"error": "distance must be 0.01-100 cm and points 1-100000"}), 400
+
+    allowed = np.ones(len(state["labels"]), dtype=bool)
+    ghosted = [int(x) for x in data.get("ghosted_plant_ids", [])]
+    if ghosted:
+        allowed &= ~np.isin(state["plant_id"], ghosted)
+    if data.get("height_filter"):
+        threshold = float(data.get("height_cm", 0)) / 100.0
+        allowed &= state["height"] >= threshold if data.get("height_above") else state["height"] < threshold
+
+    idx = flood_indices(state["xyz_local"], seed, distance_cm, max_points, allowed)
+    if len(idx) == 0:
+        return jsonify({"error": "seed point is outside the active filters"}), 400
+    return jsonify({"indices": idx.tolist(), "count": int(len(idx))})
 
 
 @app.route("/crop_indices", methods=["POST"])

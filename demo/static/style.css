@@ -152,6 +152,7 @@ button.active {
 }
 
 #tool-brush.active,
+#tool-flood.active,
 #tool-lasso.active,
 #tool-sam.active,
 #tool-crop.active,
