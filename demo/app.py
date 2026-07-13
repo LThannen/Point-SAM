@@ -1352,6 +1352,13 @@ def _assign_target(idx, otype_value, leaf_value):
     return int(np.sum((old_otype != state["otype"][idx]) | (old_leafid != state["leafid"][idx])))
 
 
+def _protect_plant_labels(idx, enabled):
+    if state["mode"] != "plant" or not enabled:
+        return idx, 0
+    keep = state["otype"][idx] == 0
+    return idx[keep], int(np.sum(~keep))
+
+
 def _epsg_geokey_vlr():
     vlr = GeoKeyDirectoryVlr()
     vlr.geo_keys_header.key_directory_version = 1
@@ -2010,6 +2017,7 @@ def assign_indices():
     idx = np.unique(idx)
     if len(idx) == 0:
         return jsonify({"error": "no points selected"}), 400
+    idx, skipped = _protect_plant_labels(idx, bool(data.get("protect_existing", False)))
 
     changed = _assign_target(idx, label, leaf)
     state["prompt_coords"] = []
@@ -2022,6 +2030,7 @@ def assign_indices():
             "target_leafid": leaf,
             "target_plant_id": int(leaf) if state["mode"] == "separation" else None,
             "changed": int(changed),
+            "skipped": skipped,
             "labels": state["labels"].tolist(),
             "otype": state["otype"].tolist() if state["mode"] == "plant" else None,
             "leafid": state["leafid"].tolist() if state["mode"] == "plant" else None,
@@ -2343,6 +2352,7 @@ def commit():
 
     if state["mode"] == "plant":
         idx = np.flatnonzero(state["current_mask"])
+        idx, skipped = _protect_plant_labels(idx, bool(data.get("protect_existing", False)))
         changed = _assign_target(idx, label, leaf)
         state["prompt_coords"] = []
         state["prompt_labels"] = []
@@ -2353,7 +2363,7 @@ def commit():
                 "label": label,
                 "target_leafid": leaf,
                 "changed": int(changed),
-                "skipped": 0,
+                "skipped": skipped,
                 "replaced": 0,
                 "labels": state["labels"].tolist(),
                 "otype": state["otype"].tolist(),

@@ -92,7 +92,7 @@
             <input id="flood-distance" class="flood-only" type="number" min="0.01" max="100" step="0.1" value="1">
             <label for="flood-points" class="flood-only">Flood point limit</label>
             <input id="flood-points" class="flood-only" type="number" min="1" max="100000" step="100" value="5000">
-            <label class="check-row flood-only">
+            <label class="check-row separation-only">
                 <input type="checkbox" id="flood-protect-existing" checked>
                 protect existing labels
             </label>
@@ -100,6 +100,10 @@
             <button id="tool-crop" class="row-only">Crop Box</button>
             <button id="tool-delete">Delete Points</button>
             <button id="delete-unlabeled" title="Remove every currently unlabeled point. Undoable.">Delete unlabeled</button>
+            <label class="check-row plant-only">
+                <input type="checkbox" id="plant-protect-existing" checked>
+                protect existing leaf/stem labels
+            </label>
             <label class="check-row">
                 <input type="checkbox" id="ghost-unlabeled">
                 ghost unlabeled points
@@ -147,13 +151,13 @@
             <div class="hint">Smart Mask also respects the Height filter above.</div>
             <label for="sam-flood-points">local flood points</label>
             <input id="sam-flood-points" type="number" min="0" max="5000" step="25" value="0">
-            <label for="sam-policy-plant">existing Plant</label>
-            <select id="sam-policy-plant">
+            <label for="sam-policy-plant" class="row-only">existing Plant</label>
+            <select id="sam-policy-plant" class="row-only">
                 <option value="override">Override</option>
                 <option value="protect">Protect</option>
             </select>
-            <label for="sam-policy-ground">existing Ground</label>
-            <select id="sam-policy-ground">
+            <label for="sam-policy-ground" class="row-only">existing Ground</label>
+            <select id="sam-policy-ground" class="row-only">
                 <option value="protect">Protect</option>
                 <option value="override">Override</option>
             </select>

@@ -122,7 +122,7 @@ function targetDisplayName(data = null) {
 }
 
 function adoptNewLeafTarget(data) {
-  if (appMode === "plant" && activeTarget.kind === "new_leaf" && data?.target_leafid > 0) {
+  if (appMode === "plant" && activeTarget.kind === "new_leaf" && data?.changed > 0 && data?.target_leafid > 0) {
     activeTarget = { kind: "leaf", leafid: data.target_leafid };
     syncTargetButtons();
   }
@@ -746,7 +746,12 @@ async function assignIndices(indices) {
   const response = await fetch("/assign_indices", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label: activeLabel, target: activeTarget, indices }),
+    body: JSON.stringify({
+      label: activeLabel,
+      target: activeTarget,
+      indices,
+      protect_existing: appMode === "plant" && document.getElementById("plant-protect-existing").checked,
+    }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -760,7 +765,8 @@ async function assignIndices(indices) {
   adoptNewLeafTarget(data);
   repaint(data);
   updateCounts(data);
-  setStatus(`Painted ${data.changed.toLocaleString()} points as ${targetDisplayName(data)}`);
+  const protectedText = data.skipped ? `; protected ${data.skipped.toLocaleString()} old labels` : "";
+  setStatus(`Painted ${data.changed.toLocaleString()} points as ${targetDisplayName(data)}${protectedText}`);
 }
 
 async function onFloodClick(event) {
@@ -781,7 +787,9 @@ async function onFloodClick(event) {
       seed_index: hit.index,
       distance_cm: Number(document.getElementById("flood-distance").value),
       max_points: Number(document.getElementById("flood-points").value),
-      protect_existing: document.getElementById("flood-protect-existing").checked,
+      protect_existing: appMode === "plant"
+        ? document.getElementById("plant-protect-existing").checked
+        : document.getElementById("flood-protect-existing").checked,
       ghosted_plant_ids: Array.from(ghostedPlantIds),
       height_filter: document.getElementById("height-filter-enabled").checked,
       height_cm: Number(document.getElementById("height-filter-cm").value),
@@ -947,6 +955,7 @@ async function commitMask(context = null) {
       label: activeLabel,
       target: activeTarget,
       layer_policy: layerPolicyPayload(),
+      protect_existing: appMode === "plant" && document.getElementById("plant-protect-existing").checked,
       ghosted_plant_ids: Array.from(ghostedPlantIds),
     }),
   });

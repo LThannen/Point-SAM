@@ -22,7 +22,7 @@ parser.add_argument("--plant", default="00")
 args = parser.parse_args()
 
 load = {"plant_id": args.plant, "date": args.date, "n": 2048}
-cloud = post(args.url, "/load_plant", load)
+cloud = post(args.url, "/load_plant", {**load, "raw": True})
 assert cloud["mode"] == "plant" and cloud["plant"] == args.plant
 assert cloud["counts"]["unlabeled"] > 0
 seed = next(i for i, value in enumerate(cloud["otype"]) if value == 0)
@@ -39,8 +39,15 @@ leaf = post(
         "indices": flood["indices"],
         "label": 2,
         "target": {"kind": "new_leaf"},
+        "protect_existing": True,
     },
 )
 assert any(item["id"] == leaf["target_leafid"] for item in leaf["leaves"])
+protected = post(
+    args.url,
+    "/assign_indices",
+    {"indices": flood["indices"], "label": 1, "target": {"kind": "stem"}, "protect_existing": True},
+)
+assert protected["changed"] == 0 and protected["skipped"] == len(flood["indices"])
 post(args.url, "/load_plant", load)  # discard the in-memory test assignment
 print("plant-mode fallback: OK")
