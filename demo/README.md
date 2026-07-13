@@ -281,6 +281,27 @@ If the dataset has no `row_frame.json`, row mode does not crop by row frame and 
 
 ## Browser Workflow
 
+### Pheno4D single-plant scans
+
+Convert the raw five-column Pheno4D text scans into the labeler's raw layout.
+Only XYZ is read; both supplied label columns are deliberately ignored.
+
+```bash
+cd /home/lukas/pointr/Point-SAM
+/home/lukas/pointr/venv/bin/python demo/prepare_pheno4d.py \
+  /home/lukas/PHD/Resources/Pheno4D \
+  --out /home/lukas/pointr/pheno4d_pointsam_dataset
+
+POINTSAM_N=0 PYTHONPATH=$PWD /home/lukas/pointr/venv/bin/python demo/app.py \
+  --port 5056 \
+  --dataset-root /home/lukas/pointr/pheno4d_pointsam_dataset
+```
+
+All modes use the same workflow as FP4D: remove ground from the raw scan,
+separate/confirm plant `00`, then label stem and leaves.
+`POINTSAM_N=0` loads every raw point so exports are not limited to a working
+sample. Re-running the importer fills missing raw files without replacing labels.
+
 ### Choose Dataset
 
 At the top of the sidebar:

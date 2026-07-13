@@ -67,7 +67,6 @@ LEAF_PALETTE = np.asarray(
 )
 BASE_PLANT_COUNT = 14
 REF_DATE = "230621"
-
 sys.path.append(str(LEGACY_PREPROCESS_ROOT))
 
 
@@ -85,7 +84,7 @@ class Dataset:
     separation_dates: tuple[str, ...]
     early_dates: tuple[str, ...]
     plants: tuple[str, ...]
-    epsg: int
+    epsg: int | None
 
 
 def _npy_dict(path: Path):
@@ -272,7 +271,8 @@ def _resolve_dataset(root: Path, plot: str | None = None) -> Dataset:
         epsg_candidates.extend(sorted(stage1_dir.glob("*.npy"))[:3])
     if leafstem_root.exists():
         epsg_candidates.extend(sorted(leafstem_root.glob("plant_*/handlabel_*.npy"))[:3])
-    epsg = _read_epsg(epsg_candidates)
+    metadata = root / "dataset.json"
+    epsg = json.loads(metadata.read_text()).get("epsg") if metadata.exists() else _read_epsg(epsg_candidates)
     early_dates = tuple(d for d in dates if d <= "230621") or tuple(dates[:3])
     return Dataset(
         root=root,
@@ -757,19 +757,22 @@ def _row_veg_path(date):
     return path
 
 
-def _separator_ref_xy():
-    o = np.load(_row_veg_path(REF_DATE), allow_pickle=True).item()
+def _separator_ref_xy(date):
+    try:
+        path = _row_veg_path(REF_DATE)
+    except FileNotFoundError:
+        path = _row_veg_path(date)
+    o = np.load(path, allow_pickle=True).item()
+    xyz = o["xyz_utm"]
     if "label" in o:
-        xyz = o["xyz_utm"][o["label"] == 1]
-    else:
-        xyz = o["xyz_utm"]
+        xyz = xyz[o["label"] == 1]
     if len(xyz) == 0:
-        raise RuntimeError(f"no plant points in {_row_veg_path(REF_DATE)}")
+        raise RuntimeError(f"no plant points in {path}")
     return (xyz[:, :2] * 100.0).mean(0)
 
 
-def _utm_to_separator_cm(xyz_utm, ref_xy=None):
-    ref_xy = _separator_ref_xy() if ref_xy is None else ref_xy
+def _utm_to_separator_cm(xyz_utm, date):
+    ref_xy = _separator_ref_xy(date)
     xyz_local = xyz_utm.astype(np.float64).copy()
     xyz_local[:, 2] -= xyz_local[:, 2].min()
     xyz_local *= 100.0
@@ -859,7 +862,7 @@ def _load_row_veg(date, seed_auto=True, n_target=None, raw=False):
     if "xyz_local" in o and len(o["xyz_local"]) == len(xyz_utm):
         xyz_local = np.asarray(o["xyz_local"], dtype=np.float32)
     else:
-        xyz_local = _utm_to_separator_cm(xyz_utm)
+        xyz_local = _utm_to_separator_cm(xyz_utm, date)
     full_count = len(xyz_utm)
     sel = _sample_indices(full_count, n_target)
     xyz_utm = xyz_utm[sel]
@@ -1328,7 +1331,8 @@ def _make_las_header(xyz=None, source_header=None):
         header = laspy.LasHeader(point_format=3, version=source_header.version)
         header.scales = source_header.scales
         header.offsets = source_header.offsets
-    header.vlrs.append(_epsg_geokey_vlr())
+    if active_dataset.epsg is not None:
+        header.vlrs.append(_epsg_geokey_vlr())
     return header
 
 
