@@ -1040,13 +1040,54 @@ def _overlay_labels_on_raw(hand_path, xyz_utm, radius_m=0.01):
     return otype, leafid, str(hand_path)
 
 
+def _isolated_plant_geometry(plant, date, use_raw=False):
+    """Load a single-plant dataset before a stage-2 export exists."""
+    identity = _identity_config()
+    locked = [] if not identity else [int(x) for x in identity.get("locked_plant_ids", [])]
+    if (
+        not identity
+        or identity.get("identity") != "single isolated Pheno4D plant"
+        or locked != [int(plant)]
+    ):
+        return None
+
+    if not use_raw:
+        try:
+            path = _row_veg_path(date)
+        except FileNotFoundError:
+            path = None
+        if path is not None:
+            saved = _npy_dict(path)
+            if saved is None or "xyz_utm" not in saved:
+                raise ValueError(f"invalid saved labels: {path}")
+            xyz_all = np.asarray(saved["xyz_utm"], dtype=np.float64)
+            labels = np.asarray(saved.get("label", np.zeros(len(xyz_all))), dtype=np.uint8)
+            if len(labels) != len(xyz_all):
+                raise ValueError(f"saved labels do not match points: {path}")
+            keep = labels != 2  # retain plant and not-yet-labelled points; remove explicit ground
+            xyz_utm = xyz_all[keep]
+            if len(xyz_utm) == 0:
+                raise RuntimeError(f"no non-ground points in {path}")
+            xyz_local_all = saved.get("xyz_local")
+            if xyz_local_all is not None and len(xyz_local_all) == len(xyz_all):
+                xyz_local = np.asarray(xyz_local_all, dtype=np.float32)[keep]
+            else:
+                xyz_local = xyz_utm.copy()
+                xyz_local[:, :2] -= xyz_local[:, :2].mean(axis=0)
+                xyz_local[:, 2] -= xyz_local[:, 2].min()
+                xyz_local = (xyz_local * 100.0).astype(np.float32)
+            return path, xyz_local, xyz_utm, len(xyz_utm)
+
+    path, xyz_utm, _, _, full_count = _load_row_sample(date, 0)
+    xyz_local = xyz_utm.copy()
+    xyz_local[:, :2] -= xyz_local[:, :2].mean(axis=0)
+    xyz_local[:, 2] -= xyz_local[:, 2].min()
+    return path, (xyz_local * 100.0).astype(np.float32), xyz_utm, full_count
+
+
 def _load_plant(plant, date, n_target=None, raw=False):
     n_target = int(args.n if n_target is None else n_target)
-    pdir, local_path, utm_path, hand_path = _plant_paths(plant, date)
-    if not local_path.exists():
-        raise FileNotFoundError(local_path)
-    if not utm_path.exists():
-        raise FileNotFoundError(f"{utm_path} missing; run separate_from_labels.py to emit UTM companions")
+    _, local_path, utm_path, hand_path = _plant_paths(plant, date)
     want_merge = isinstance(raw, str) and raw.lower() in ("merge", "overlay", "keep")
     want_raw = want_merge or bool(raw)
     embedded = None if want_raw else _load_handlabel_geometry(hand_path)
@@ -1055,14 +1096,26 @@ def _load_plant(plant, date, n_target=None, raw=False):
         xyz_local = xyz_local.astype(np.float32)
         xyz_utm = xyz_utm.astype(np.float64)
         loaded_from = str(hand_path)
+        source_path = hand_path
+        full_count = len(xyz_local)
     else:
         # raw shows the full on-disk cloud (points deleted while labelling reappear).
         # want_merge additionally overlays the saved labels so dropped/missed leaves come
         # back UNLABELED over the labelled ones (fine-tune without redoing the plant).
-        xyz_local = np.load(local_path).astype(np.float32)
-        xyz_utm = np.load(utm_path).astype(np.float64)
-        if xyz_utm.shape != xyz_local.shape:
-            raise RuntimeError(f"{utm_path} shape {xyz_utm.shape} does not match {local_path} {xyz_local.shape}")
+        if local_path.exists() and utm_path.exists():
+            source_path = local_path
+            xyz_local = np.load(local_path).astype(np.float32)
+            xyz_utm = np.load(utm_path).astype(np.float64)
+            full_count = len(xyz_local)
+            if xyz_utm.shape != xyz_local.shape:
+                raise RuntimeError(f"{utm_path} shape {xyz_utm.shape} does not match {local_path} {xyz_local.shape}")
+        else:
+            fallback = _isolated_plant_geometry(plant, date, use_raw=want_raw)
+            if fallback is None:
+                if not local_path.exists():
+                    raise FileNotFoundError(local_path)
+                raise FileNotFoundError(f"{utm_path} missing; run separate_from_labels.py to emit UTM companions")
+            source_path, xyz_local, xyz_utm, full_count = fallback
         if want_merge:
             otype, leafid, loaded_from = _overlay_labels_on_raw(hand_path, xyz_utm)
         elif want_raw:
@@ -1071,7 +1124,6 @@ def _load_plant(plant, date, n_target=None, raw=False):
             loaded_from = None
         else:
             otype, leafid, loaded_from = _load_saved_leafstem(plant, date, len(xyz_local))
-    full_count = len(xyz_local)
     sel = _sample_indices(full_count, n_target)
     xyz_local = xyz_local[sel]
     xyz_utm = xyz_utm[sel]
@@ -1081,7 +1133,7 @@ def _load_plant(plant, date, n_target=None, raw=False):
     height = (xyz_local[:, 2] - float(np.min(xyz_local[:, 2]))).astype(np.float32) / 100.0
     _set_active_cloud(
         date,
-        local_path,
+        source_path,
         xyz_utm,
         height,
         display_rgb,
