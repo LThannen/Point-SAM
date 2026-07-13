@@ -8,6 +8,7 @@ import {
   renderer,
   replacePointCloud,
 } from "/static/viewer.js";
+import { frontmostIndices } from "/static/foreground.js";
 
 const LABELS = {
   0: { name: "Erase", color: [0.62, 0.62, 0.62] },
@@ -690,6 +691,34 @@ function selectedIndicesFromBrushStroke() {
     }
   }
   return selected;
+}
+
+function foregroundGate(indices) {
+  const enabled = document.getElementById("foreground-only");
+  if (appMode !== "plant" || !enabled?.checked || !indices.length) return indices;
+  const rect = overlay.getBoundingClientRect();
+  const positions = points.geometry.attributes.position;
+  const cellSize = 3;
+  const columns = Math.ceil(rect.width / cellSize) + 1;
+  const cells = new Int32Array(positions.count);
+  const depths = new Float32Array(positions.count);
+  const point = new THREE.Vector3();
+  const viewPoint = new THREE.Vector3();
+  cells.fill(-1);
+  camera.updateMatrixWorld();
+
+  for (let i = 0; i < positions.count; i++) {
+    if (!isSelectableIndex(i)) continue;
+    point.fromBufferAttribute(positions, i);
+    viewPoint.copy(point).applyMatrix4(camera.matrixWorldInverse);
+    point.project(camera);
+    if (point.x < -1 || point.x > 1 || point.y < -1 || point.y > 1 || point.z < -1 || point.z > 1) continue;
+    const sx = ((point.x + 1) / 2) * rect.width;
+    const sy = ((-point.y + 1) / 2) * rect.height;
+    cells[i] = Math.floor(sx / cellSize) + Math.floor(sy / cellSize) * columns;
+    depths[i] = -viewPoint.z;
+  }
+  return frontmostIndices(indices, cells, depths, 0.01, columns);
 }
 
 function nearestPointAtCanvasPoint(canvasPt, maxPixels = 14) {
@@ -1394,7 +1423,7 @@ function bindCanvasEvents() {
     } else if (toolMode === "delete") {
       await deleteIndices(heightGate(indices));
     } else {
-      await assignIndices(heightGate(indices));
+      await assignIndices(heightGate(foregroundGate(indices)));
     }
   });
 
