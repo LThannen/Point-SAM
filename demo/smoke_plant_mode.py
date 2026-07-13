@@ -25,10 +25,21 @@ load = {"plant_id": args.plant, "date": args.date, "n": 2048}
 cloud = post(args.url, "/load_plant", load)
 assert cloud["mode"] == "plant" and cloud["plant"] == args.plant
 assert cloud["counts"]["unlabeled"] > 0
+seed = next(i for i, value in enumerate(cloud["otype"]) if value == 0)
+flood = post(
+    args.url,
+    "/point_flood",
+    {"seed_index": seed, "distance_cm": 1, "max_points": 25, "protect_existing": True},
+)
+assert all(cloud["otype"][index] == 0 for index in flood["indices"])
 leaf = post(
     args.url,
     "/assign_indices",
-    {"indices": [0], "label": 2, "target": {"kind": "new_leaf"}},
+    {
+        "indices": flood["indices"],
+        "label": 2,
+        "target": {"kind": "new_leaf"},
+    },
 )
 assert any(item["id"] == leaf["target_leafid"] for item in leaf["leaves"])
 post(args.url, "/load_plant", load)  # discard the in-memory test assignment

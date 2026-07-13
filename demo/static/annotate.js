@@ -290,6 +290,7 @@ function syncTargetButtons() {
 }
 
 function updateModeVisibility() {
+  const isPlantLabellingMode = appMode === "plant" || appMode === "separation";
   document.getElementById("mode-select").value = appMode;
   document.querySelectorAll(".plant-only").forEach((el) => {
     el.style.display = appMode === "plant" ? "" : "none";
@@ -297,13 +298,16 @@ function updateModeVisibility() {
   document.querySelectorAll(".separation-only").forEach((el) => {
     el.style.display = appMode === "separation" ? "" : "none";
   });
-  document.querySelectorAll(".row-only").forEach((el) => {
-    el.style.display = appMode === "plant" || appMode === "separation" ? "none" : "";
+  document.querySelectorAll(".flood-only").forEach((el) => {
+    el.style.display = isPlantLabellingMode ? "" : "none";
   });
-  if ((appMode === "plant" || appMode === "separation") && toolMode === "crop") {
+  document.querySelectorAll(".row-only").forEach((el) => {
+    el.style.display = isPlantLabellingMode ? "none" : "";
+  });
+  if (isPlantLabellingMode && toolMode === "crop") {
     setToolMode("brush");
   }
-  if (appMode !== "separation" && toolMode === "flood") setToolMode("brush");
+  if (!isPlantLabellingMode && toolMode === "flood") setToolMode("brush");
   document.getElementById("export-labels").textContent = appMode === "plant" ? "Export plant" : appMode === "separation" ? "Export separation" : "Export";
   populateDateSelect(document.getElementById("date-select").value);
 }

@@ -2034,8 +2034,8 @@ def assign_indices():
 @app.route("/point_flood", methods=["POST"])
 def point_flood():
     _ensure_loaded()
-    if state["mode"] != "separation":
-        return jsonify({"error": "point flood is only available in plant separation mode"}), 400
+    if state["mode"] not in ("plant", "separation"):
+        return jsonify({"error": "point flood is only available in plant labelling modes"}), 400
     data = request.get_json(silent=True) or {}
     try:
         seed = int(data.get("seed_index", -1))
@@ -2047,7 +2047,7 @@ def point_flood():
         return jsonify({"error": "distance must be 0.01-100 cm and points 1-100000"}), 400
 
     allowed = np.ones(len(state["labels"]), dtype=bool)
-    ghosted = [int(x) for x in data.get("ghosted_plant_ids", [])]
+    ghosted = [int(x) for x in data.get("ghosted_plant_ids", [])] if state["mode"] == "separation" else []
     if ghosted:
         allowed &= ~np.isin(state["plant_id"], ghosted)
     if data.get("height_filter"):
@@ -2056,15 +2056,16 @@ def point_flood():
     protect_existing = bool(data.get("protect_existing", True))
     if protect_existing:
         seed_allowed = 0 <= seed < len(allowed) and allowed[seed]
-        allowed &= state["plant_id"] < 0
+        existing = state["plant_id"] >= 0 if state["mode"] == "separation" else state["otype"] > 0
+        allowed &= ~existing
         if seed_allowed:
             allowed[seed] = True
 
     idx = flood_indices(state["xyz_local"], seed, distance_cm, max_points, allowed)
     if protect_existing:
-        idx = idx[state["plant_id"][idx] < 0]
+        idx = idx[~existing[idx]]
     if len(idx) == 0:
-        return jsonify({"error": "no unassigned points reached inside the active filters"}), 400
+        return jsonify({"error": "no unlabeled points reached inside the active filters"}), 400
     return jsonify({"indices": idx.tolist(), "count": int(len(idx))})
 
 
