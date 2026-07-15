@@ -431,6 +431,7 @@ async function setDataset(plot = null) {
   populatePlotSelect(data.plots || [], data.dataset.plot);
   adoptDatasetMeta(data);
   await populateDatasetSelect();
+  window.dispatchEvent(new CustomEvent("pointsam:dataset-changed", { detail: data.dataset }));
   const plotCount = (data.plots || []).length;
   setStatus(
     `Dataset set: ${data.dataset.plot}` +

@@ -25,6 +25,10 @@ from flask import jsonify, request
 # where relink_leaf_identity.py + tree_compare.py live (automatic/CPD seed source);
 # override with POINTSAM_RELINK_PATH on machines where they aren't at /home/lukas/pointr.
 RELINK_PATH = os.environ.get("POINTSAM_RELINK_PATH", "/home/lukas/pointr")
+RELINK_BASE = os.environ.get(
+    "FP4D_PLANT01_BASE",
+    "/home/lukas/pointr/fp4d_pointsam_dataset/stage3_leafstem_labeled/Plot03/plant_01",
+)
 DEFAULT_CLOUD_POINTS = 50_000
 MAX_CLOUD_POINTS = 60_000
 
@@ -171,7 +175,65 @@ def _manual_path(dataset, plant):
     return dataset.leafstem_root / f"plant_{int(plant):02d}" / "manual_chains.json"
 
 
-def seed_chains(dataset, plant, fresh=False):
+def _link_context(dataset, plant):
+    return os.path.realpath(_manual_path(dataset, plant).parent)
+
+
+def _auto_seed_available(dataset, plant):
+    return os.path.realpath(_manual_path(dataset, plant).parent) == os.path.realpath(RELINK_BASE)
+
+
+def _valid_observations(dataset, npy_dict, plant):
+    valid = {}
+    for date in dataset.dates:
+        path = _handlabel_path(dataset, plant, date)
+        if not path.exists():
+            continue
+        data = npy_dict(path)
+        if not data or "otype" not in data or "leafid" not in data:
+            raise ValueError(f"{path} missing otype/leafid")
+        otype = np.asarray(data["otype"])
+        leafid = np.asarray(data["leafid"])
+        if len(otype) != len(leafid):
+            raise ValueError(f"{path} has mismatched otype/leafid lengths")
+        valid[str(date)] = {int(x) for x in np.unique(leafid[otype == 2]) if int(x) > 0}
+    return valid
+
+
+def _normalise_chains(dataset, npy_dict, plant, chains):
+    if not isinstance(chains, list):
+        raise ValueError("chains must be a list")
+    valid = _valid_observations(dataset, npy_dict, plant)
+    clean, seen, bad = [], set(), []
+    for i, ch in enumerate(chains, 1):
+        if not isinstance(ch, dict) or not isinstance(ch.get("obs") or {}, dict):
+            raise ValueError("each chain must contain an obs object")
+        obs = {}
+        for date, leaf in (ch.get("obs") or {}).items():
+            date = str(date)
+            try:
+                leaf = int(leaf)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid leaf id for {date}: {leaf}") from exc
+            key = (date, leaf)
+            if leaf not in valid.get(date, set()):
+                bad.append(f"{date}:L{leaf}")
+            elif key in seen:
+                raise ValueError(f"duplicate observation {date}:L{leaf}")
+            else:
+                seen.add(key)
+                obs[date] = leaf
+        if obs:
+            clean.append({"rank": int(ch.get("rank", i)), "obs": obs})
+    if bad:
+        raise ValueError("observations without matching hand labels: " + ", ".join(sorted(set(bad))))
+    clean.sort(key=lambda e: e["rank"])
+    for i, entry in enumerate(clean, 1):
+        entry["rank"] = i
+    return clean
+
+
+def seed_chains(dataset, npy_dict, plant, fresh=False):
     """Chains to seed the UI: saved manual_chains.json if present (unless fresh),
     else the automatic relink tracker (best-effort), else []. Each =
     {rank, obs:{date:leafid}}. fresh=True forces the automatic guess (ignore save)
@@ -179,10 +241,10 @@ def seed_chains(dataset, plant, fresh=False):
     this is the one-click "Auto-link" draft, slower (~seconds) but a better start."""
     mp = _manual_path(dataset, plant)
     if mp.exists() and not fresh:
-        try:
-            return sorted(json.load(open(mp)), key=lambda e: e.get("rank", 1 << 30))
-        except (ValueError, OSError):
-            pass
+        with open(mp) as stream:
+            return _normalise_chains(dataset, npy_dict, plant, json.load(stream))
+    if not _auto_seed_available(dataset, plant):
+        return []
     try:
         if RELINK_PATH not in sys.path:
             sys.path.insert(0, RELINK_PATH)
@@ -193,26 +255,21 @@ def seed_chains(dataset, plant, fresh=False):
         for (d, lid), r in brm.items():
             pid_rank[raw_to_pid[(d, lid)]] = r
         order = sorted(range(len(chains)), key=lambda i: pid_rank[i + 1])
-        return [{"rank": r + 1, "obs": {d: int(l) for d, l in chains[i].items()}}
-                for r, i in enumerate(order)]
+        draft = [{"rank": r + 1, "obs": {d: int(l) for d, l in chains[i].items()}}
+                 for r, i in enumerate(order)]
+        return _normalise_chains(dataset, npy_dict, plant, draft)
     except Exception as exc:                                    # noqa: BLE001 - best-effort seed
         print(f"[link] automatic seed unavailable ({exc}); starting empty", flush=True)
         return []
 
 
-def save_chains(dataset, plant, chains):
+def save_chains(dataset, npy_dict, plant, chains):
     """Normalise (drop empty, re-rank 1..N basal->apical) and write manual_chains.json."""
-    clean = []
-    for i, ch in enumerate(chains, 1):
-        obs = {str(d): int(l) for d, l in (ch.get("obs") or {}).items()}
-        if obs:
-            clean.append({"rank": int(ch.get("rank", i)), "obs": obs})
-    clean.sort(key=lambda e: e["rank"])
-    for i, e in enumerate(clean, 1):
-        e["rank"] = i
+    clean = _normalise_chains(dataset, npy_dict, plant, chains)
     mp = _manual_path(dataset, plant)
     mp.parent.mkdir(parents=True, exist_ok=True)
-    json.dump(clean, open(mp, "w"), indent=1)
+    with open(mp, "w") as stream:
+        json.dump(clean, stream, indent=1)
     print(f"[link] wrote {mp} ({len(clean)} chains)", flush=True)
     return mp, len(clean)
 
@@ -241,6 +298,7 @@ def register_link_routes(app, get_dataset, npy_dict):
 
     @app.route("/link/clouds")
     def link_clouds():
+        dataset = get_dataset()
         plant = request.args.get("plant", "01")
         try:
             max_points = int(request.args.get("max_points", DEFAULT_CLOUD_POINTS))
@@ -248,35 +306,53 @@ def register_link_routes(app, get_dataset, npy_dict):
             return jsonify({"error": "max_points must be an integer"}), 400
         max_points = max(1, min(MAX_CLOUD_POINTS, max_points))
         try:
-            clouds = leaf_clouds(get_dataset(), npy_dict, plant, max_points=max_points)
+            clouds = leaf_clouds(dataset, npy_dict, plant, max_points=max_points)
         except (OSError, KeyError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
-        dates = [d for d in get_dataset().dates if d in clouds]
-        return jsonify({"plant": f"{int(plant):02d}", "dates": dates, "clouds": clouds})
+        dates = [d for d in dataset.dates if d in clouds]
+        return jsonify({"plant": f"{int(plant):02d}", "dates": dates, "clouds": clouds,
+                        "context": _link_context(dataset, plant)})
 
     @app.route("/link/leaves")
     def link_leaves():
+        dataset = get_dataset()
         plant = request.args.get("plant", "01")
         try:
-            sigs = leaf_signatures(get_dataset(), npy_dict, plant)
+            sigs = leaf_signatures(dataset, npy_dict, plant)
         except (OSError, KeyError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
-        dates = [d for d in get_dataset().dates if d in sigs]
+        dates = [d for d in dataset.dates if d in sigs]
         return jsonify({"plant": plant, "dates": dates, "leaves": sigs})
 
     @app.route("/link/chains")
     def link_chains():
+        dataset = get_dataset()
         plant = request.args.get("plant", "01")
         fresh = request.args.get("fresh") in ("1", "true", "yes")
-        return jsonify({"plant": plant, "chains": seed_chains(get_dataset(), plant, fresh=fresh),
-                        "has_manual": _manual_path(get_dataset(), plant).exists()})
+        try:
+            chains = seed_chains(dataset, npy_dict, plant, fresh=fresh)
+        except (OSError, TypeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"plant": f"{int(plant):02d}", "chains": chains,
+                        "has_manual": _manual_path(dataset, plant).exists(),
+                        "auto_available": _auto_seed_available(dataset, plant),
+                        "context": _link_context(dataset, plant)})
 
     @app.route("/link/save", methods=["POST"])
     def link_save():
-        data = request.get_json(silent=True) or {}
+        dataset = get_dataset()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "request body must be a JSON object"}), 400
         plant = str(data.get("plant", "01"))
         try:
-            mp, n = save_chains(get_dataset(), plant, data.get("chains", []))
-        except (OSError, ValueError) as exc:
+            expected_context = _link_context(dataset, plant)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if data.get("context") != expected_context:
+            return jsonify({"error": "dataset or plant changed; reload links before saving"}), 409
+        try:
+            mp, n = save_chains(dataset, npy_dict, plant, data.get("chains", []))
+        except (OSError, TypeError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"status": "saved", "path": str(mp), "n": n})

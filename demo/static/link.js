@@ -19,7 +19,7 @@ const PALE = [0.66, 0.70, 0.75];
 const FAINT = [0.82, 0.84, 0.87];
 
 const state = {
-  plant: "01", loadedPlant: null,
+  plant: "01", loadedPlant: null, loadedContext: null,
   dates: [], clouds: {}, allViews: {},
   chains: [],                 // [{obs:{date:leafid}}], order == rank-1
   pairIndex: 0, leftCursor: 0,
@@ -44,11 +44,12 @@ function currentPlant() {
   const v = sel && sel.value ? sel.value : "1";
   return v.toString().padStart(2, "0");
 }
-async function populatePlants() {
+async function populatePlants(token = state.loadToken) {
   const lp = document.getElementById("link-plant");
-  if (!lp) return;
+  if (!lp) return false;
   try {
     const data = await fetchJson("/link/plants");
+    if (token !== state.loadToken) return false;
     const plants = data.plants || [];
     const opts = plants.map((p) => p.plant);
     const prev = lp.value;
@@ -57,7 +58,8 @@ async function populatePlants() {
       ? plants.map((p) => `<option value="${p.plant}">plant ${p.plant} · ${p.n_dates} dates</option>`).join("")
       : `<option value="">no labeled plants</option>`;
     if (opts.length) lp.value = opts.includes(prev) ? prev : (opts.includes(side) ? side : opts[0]);
-  } catch (err) { /* keep whatever is there */ }
+    return true;
+  } catch (err) { return false; }
 }
 function cleanObs(obs) {
   const out = {};
@@ -342,7 +344,7 @@ function focusChain(i) {
 
 // ---------- load + save ----------
 async function loadData(fresh = false) {
-  state.plant = currentPlant(); state.loadedPlant = state.plant;
+  state.plant = currentPlant(); state.loadedPlant = null; state.loadedContext = null;
   const token = ++state.loadToken; setBusy(fresh ? `Auto-linking plant ${state.plant} (CPD, ~10s)…` : `Loading plant ${state.plant}…`); setStatus("");
   try {
     const [clouds, chains] = await Promise.all([
@@ -350,6 +352,7 @@ async function loadData(fresh = false) {
       fetchJson(`/link/chains?plant=${encodeURIComponent(state.plant)}${fresh ? "&fresh=1" : ""}`),
     ]);
     if (token !== state.loadToken) return;
+    if (!clouds.context || clouds.context !== chains.context) throw new Error("dataset changed while links loaded");
     state.clouds = clouds.clouds || {};
     disposeAll();
     const dates = (clouds.dates || Object.keys(state.clouds)).filter((d) => state.clouds[d]);
@@ -357,6 +360,12 @@ async function loadData(fresh = false) {
     // keep only stages that actually have >=1 labeled leaf
     state.dates = dates.filter((d) => leavesOf(d).length > 0);
     state.chains = normalizeChains(chains.chains || []);
+    if (!state.chains.length && state.dates.length) {
+      state.chains = leavesOf(state.dates[0]).map((leaf) => ({ obs: { [state.dates[0]]: leaf } }));
+    }
+    state.loadedPlant = state.plant; state.loadedContext = clouds.context;
+    const auto = document.querySelector('[data-link-action="fresh"]');
+    if (auto) { auto.disabled = !chains.auto_available; auto.title = chains.auto_available ? "Reset to the automatic CPD draft" : "Automatic linking is not configured for this plant"; }
     // Show ALL hand-labeled stages (the earliest anchor the basal leaves).
     // The auto seed only covers the comparison dates; earlier-stage leaves start
     // unassigned and you link them by hand.
@@ -369,9 +378,10 @@ async function loadData(fresh = false) {
   } finally { if (token === state.loadToken) setBusy(""); }
 }
 async function saveChains() {
+  if (!state.loadedContext) { setStatus("Save blocked: reload links for the current dataset."); return; }
   const payload = state.chains.map((c, i) => ({ rank: i + 1, obs: c.obs }));
   try {
-    const data = await fetchJson("/link/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plant: state.plant, chains: payload }) });
+    const data = await fetchJson("/link/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plant: state.plant, context: state.loadedContext, chains: payload }) });
     setStatus(`Saved ${data.n} leaves → manual_chains.json`);
   } catch (err) { setStatus(`Save failed: ${err.message}`); }
 }
@@ -404,7 +414,7 @@ function ensurePanel() {
         <div class="lk-title"><b>LINK</b><select id="link-plant" class="lk-plant" title="plant"></select><span id="link-meta"></span></div>
         <div class="lk-actions">
           <button data-link-action="reload">Reload</button>
-          <button data-link-action="fresh" title="Run the automatic tracker + CPD arbiter (TrackPlant3D) — replaces current links with an auto draft to correct">⚡ Auto-link (CPD)</button>
+          <button data-link-action="fresh" title="Automatic linking loads after the plant" disabled>⚡ Auto-link (CPD)</button>
           <button data-link-action="yaw-left">⟲</button>
           <button data-link-action="yaw-right">⟳</button>
           <button data-link-action="zoom-out">–</button>
@@ -461,7 +471,9 @@ function togglePanel() {
   const sel = document.getElementById("mode-select"); if (!state.panel || !sel) return;
   if (sel.value === MODE) {
     state.panel.classList.add("on");
-    populatePlants().then(() => {
+    const token = state.loadToken;
+    populatePlants(token).then((loaded) => {
+      if (!loaded || token !== state.loadToken) return;
       if (currentPlant() !== state.loadedPlant || !state.views.length) loadData(false); else resizeCanvas();
     });
   } else state.panel.classList.remove("on");
@@ -472,6 +484,13 @@ function setup() {
   const ps = document.getElementById("plant-select");
   if (ps) ps.addEventListener("change", () => { if (state.panel?.classList.contains("on")) loadData(false); });
   window.addEventListener("resize", resizeCanvas);
+  window.addEventListener("pointsam:dataset-changed", () => {
+    state.loadedPlant = null; state.loadedContext = null; state.loadToken += 1;
+    const token = state.loadToken;
+    if (state.panel?.classList.contains("on")) {
+      populatePlants(token).then((loaded) => { if (loaded && token === state.loadToken) loadData(false); });
+    }
+  });
   window.addEventListener("keydown", (e) => {
     if (!state.panel?.classList.contains("on")) return;
     if (e.key === "n") { markNotPresent(); } else if (e.key === "ArrowRight") { nextLeaf(); } else if (e.key === "ArrowLeft") { prevLeaf(); }
