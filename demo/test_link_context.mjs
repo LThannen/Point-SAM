@@ -34,3 +34,28 @@ assert.equal(picker.innerHTML, "unchanged");
 let cloudLoads = 0;
 if (loaded && token === state.loadToken) cloudLoads += 1;
 assert.equal(cloudLoads, 0);
+
+const renumberSource = source.match(/function chainBaseHeight[\s\S]*?\n}\n\n\/\/ ---------- load \+ save ----------/)[0]
+  .replace(/\n\n\/\/ ---------- load \+ save ----------$/, "");
+const renumberState = {
+  chains: [{ obs: { d1: 1 } }, { obs: { d1: 2 } }],
+  allViews: {
+    d1: {
+      otype: [2, 2],
+      leafid: [1, 2],
+      geometry: { attributes: { position: { getZ: (i) => [20, 5][i] } } },
+    },
+  },
+};
+let status = "";
+const rankContext = {
+  state: renumberState,
+  refreshColors() {},
+  renderUi() {},
+  setStatus(value) { status = value; },
+};
+vm.runInNewContext(`${renumberSource}; globalThis.renumberByHeight = renumberByHeight;`, rankContext);
+rankContext.renumberByHeight();
+
+assert.deepEqual(renumberState.chains.map((chain) => chain.obs.d1), [2, 1]);
+assert.match(status, /click Save/);

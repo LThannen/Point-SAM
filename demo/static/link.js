@@ -341,6 +341,22 @@ function focusChain(i) {
   const l = c.obs[leftDate()];
   if (l) jumpLeftTo(l); else setStatus(`rank ${i + 1} has no leaf in ${leftDate()}`);
 }
+function chainBaseHeight(chain) {
+  let base = Infinity;
+  for (const [date, leafid] of Object.entries(chain.obs)) {
+    const view = state.allViews[date]; if (!view) continue;
+    const positions = view.geometry.attributes.position;
+    for (let i = 0; i < view.leafid.length; i += 1) {
+      if (view.otype[i] === 2 && view.leafid[i] === leafid) base = Math.min(base, positions.getZ(i));
+    }
+  }
+  return base;
+}
+function renumberByHeight() {
+  state.chains.sort((a, b) => chainBaseHeight(a) - chainBaseHeight(b));
+  refreshColors(); renderUi();
+  setStatus("Renumbered ranks by leaf height — click Save to keep.");
+}
 
 // ---------- load + save ----------
 async function loadData(fresh = false) {
@@ -396,6 +412,7 @@ function handleAction(event) {
     "next-pair": nextPair, "prev-pair": prevPair,
     "move-up": () => moveChain(i, -1), "move-down": () => moveChain(i, 1),
     "delete-chain": () => deleteChain(i), "focus-chain": () => focusChain(i),
+    "renumber-height": renumberByHeight,
     "yaw-left": () => rotateBy(-Math.PI / 12), "yaw-right": () => rotateBy(Math.PI / 12),
     "zoom-in": () => zoomBy(1.18), "zoom-out": () => zoomBy(1 / 1.18), "reset-view": resetView,
   }[a] || (() => {}))();
@@ -420,6 +437,7 @@ function ensurePanel() {
           <button data-link-action="zoom-out">–</button>
           <button data-link-action="zoom-in">+</button>
           <button data-link-action="reset-view">Reset view</button>
+          <button data-link-action="renumber-height">↕ Renumber by height</button>
           <button class="primary" data-link-action="save">Save</button>
         </div>
       </div>
