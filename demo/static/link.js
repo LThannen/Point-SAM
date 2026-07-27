@@ -266,9 +266,9 @@ function newRightLeaves() {
   return leavesOf(rightDate()).filter((l) => amap[l] === undefined);
 }
 function nextPair() {
-  if (state.pairIndex >= state.dates.length - 2) { setStatus("Last stage pair reached."); return; }
   // any still-unmatched right leaf becomes a new chain starting here
   for (const rj of newRightLeaves()) state.chains.push({ obs: { [rightDate()]: rj } });
+  if (state.pairIndex >= state.dates.length - 2) { refreshColors(); renderUi(); setStatus("Last stage pair reached."); return; }
   state.pairIndex += 1; state.leftCursor = 0; showPair();
 }
 function prevPair() { if (state.pairIndex > 0) { state.pairIndex -= 1; state.leftCursor = 0; showPair(); } }
