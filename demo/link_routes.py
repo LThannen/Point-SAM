@@ -141,6 +141,20 @@ def _stratified_cloud_indices(otype, leafid, max_points):
     return np.sort(np.concatenate(sampled)).astype(np.int64)
 
 
+def leaf_attachment_heights(xyz, otype, leafid):
+    """Leaf id -> Z of its closest labeled stem point."""
+    stem = xyz[otype == 1]
+    if not len(stem):
+        return {}
+    stem_tree = cKDTree(stem)
+    attachment_z = {}
+    for lid in sorted(int(x) for x in np.unique(leafid[otype == 2]) if int(x) > 0):
+        leaf = xyz[(otype == 2) & (leafid == lid)]
+        distance, stem_index = stem_tree.query(leaf, k=1)
+        attachment_z[lid] = round(float(stem[int(stem_index[np.argmin(distance)]), 2]), 3)
+    return attachment_z
+
+
 def leaf_clouds(dataset, npy_dict, plant, max_points=DEFAULT_CLOUD_POINTS):
     """Per-date isolated plant clouds sampled for the 3D linker."""
     p = int(plant)
@@ -160,20 +174,12 @@ def leaf_clouds(dataset, npy_dict, plant, max_points=DEFAULT_CLOUD_POINTS):
         leafid = np.asarray(data["leafid"], dtype=np.int16)
         if not (len(xyz) == len(otype) == len(leafid)):
             raise ValueError(f"{path} has mismatched xyz/otype/leafid lengths")
-        attachment_z = {}
-        stem = xyz[otype == 1]
-        if len(stem):
-            stem_tree = cKDTree(stem)
-            for lid in sorted(int(x) for x in np.unique(leafid[otype == 2]) if int(x) > 0):
-                leaf = xyz[(otype == 2) & (leafid == lid)]
-                distance, stem_index = stem_tree.query(leaf, k=1)
-                attachment_z[lid] = round(float(stem[int(stem_index[np.argmin(distance)]), 2]), 3)
         sel = _stratified_cloud_indices(otype, leafid, max_points)
         out[date] = {
             "xyz": np.round(xyz[sel], 3).tolist(),
             "otype": otype[sel].tolist(),
             "leafid": leafid[sel].tolist(),
-            "attachment_z": attachment_z,
+            "attachment_z": leaf_attachment_heights(xyz, otype, leafid),
             "full_count": int(len(xyz)),
             "sample_count": int(len(sel)),
             "source": str(path),

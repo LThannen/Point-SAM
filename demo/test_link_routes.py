@@ -1,3 +1,4 @@
+import ast
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,38 @@ def npy_dict(path):
 
 
 class LinkRouteSafetyTest(unittest.TestCase):
+    def test_per_plant_renumber_uses_attachment_height(self):
+        tree = ast.parse((Path(__file__).parent / "app.py").read_text())
+        functions = [
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in {"_leaf_counts", "_renumber_leaves_by_height"}
+        ]
+        state = {
+            "xyz_local": np.array([
+                [0, 0, 0], [0, 0, 5], [0, 0, 15],
+                [0.1, 0, 15], [10, 0, -5],
+                [0.1, 0, 5], [10, 0, 6],
+            ]),
+            "otype": np.array([1, 1, 1, 2, 2, 2, 2]),
+            "leafid": np.array([0, 0, 0, 1, 1, 2, 2]),
+            "labels": None,
+            "undo": [],
+        }
+        namespace = {
+            "np": np,
+            "state": state,
+            "leaf_attachment_heights": lambda *_: {1: 15.0, 2: 5.0},
+        }
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "app.py", "exec"), namespace)
+
+        mapping = namespace["_renumber_leaves_by_height"]()
+
+        self.assertEqual(mapping, {2: 1, 1: 2})
+        np.testing.assert_array_equal(state["leafid"], [0, 0, 0, 2, 2, 1, 1])
+        namespace["leaf_attachment_heights"] = lambda *_: {}
+        with self.assertRaisesRegex(ValueError, "Label the stem"):
+            namespace["_renumber_leaves_by_height"]()
+
     def test_cloud_attachment_height_uses_nearest_stem_point(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

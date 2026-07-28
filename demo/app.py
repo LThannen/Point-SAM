@@ -956,7 +956,7 @@ def _leaf_counts():
     for lid in sorted(int(x) for x in np.unique(state["leafid"]) if int(x) > 0):
         pts = np.flatnonzero((state["otype"] == 2) & (state["leafid"] == lid))
         if len(pts):
-            out.append({"id": lid, "points": int(len(pts)), "base_z": float(np.min(state["xyz_local"][pts, 2]))})
+            out.append({"id": lid, "points": int(len(pts))})
     return out
 
 
@@ -1456,10 +1456,13 @@ def _export_fullres():
 
 
 def _renumber_leaves_by_height():
-    leaves = _leaf_counts()
-    mapping = {item["id"]: i + 1 for i, item in enumerate(sorted(leaves, key=lambda x: x["base_z"]))}
-    if not mapping:
-        return mapping
+    leaf_ids = [item["id"] for item in _leaf_counts()]
+    if not leaf_ids:
+        return {}
+    heights = leaf_attachment_heights(state["xyz_local"], state["otype"], state["leafid"])
+    if any(lid not in heights for lid in leaf_ids):
+        raise ValueError("Label the stem before renumbering leaves")
+    mapping = {old: new for new, old in enumerate(sorted(leaf_ids, key=heights.__getitem__), 1)}
     old_otype = state["otype"].copy()
     old_leafid = state["leafid"].copy()
     state["undo"].append(("leafstem", np.arange(len(state["otype"])), old_otype, old_leafid))
@@ -1945,7 +1948,10 @@ def renumber_leaves():
     _ensure_loaded()
     if state["mode"] != "plant":
         return jsonify({"error": "renumber is only available in plant mode"}), 400
-    mapping = _renumber_leaves_by_height()
+    try:
+        mapping = _renumber_leaves_by_height()
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     return jsonify({"status": "renumbered", "mapping": mapping, **_cloud_payload()})
 
 
@@ -2593,7 +2599,7 @@ def export():
     return jsonify(payload)
 
 
-from link_routes import register_link_routes  # noqa: E402
+from link_routes import leaf_attachment_heights, register_link_routes  # noqa: E402
 register_link_routes(app, lambda: active_dataset, _npy_dict)
 
 
