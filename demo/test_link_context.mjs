@@ -41,9 +41,10 @@ const renumberState = {
   chains: [{ obs: { d1: 1 } }, { obs: { d1: 2 } }],
   allViews: {
     d1: {
+      cloud: { attachment_z: { 1: 15, 2: 5 } },
       otype: [2, 2],
       leafid: [1, 2],
-      geometry: { attributes: { position: { getZ: (i) => [20, 5][i] } } },
+      geometry: { attributes: { position: { getZ: (i) => [-5, 6][i] } } },
     },
   },
 };
@@ -58,4 +59,4 @@ vm.runInNewContext(`${renumberSource}; globalThis.renumberByHeight = renumberByH
 rankContext.renumberByHeight();
 
 assert.deepEqual(renumberState.chains.map((chain) => chain.obs.d1), [2, 1]);
-assert.match(status, /click Save/);
+assert.match(status, /stem attachment height/);

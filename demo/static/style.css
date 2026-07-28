@@ -354,7 +354,7 @@ button.active {
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 340px;
+    grid-template-columns: minmax(0, 1fr) var(--link-sidebar-width, 340px);
 }
 
 #link-view-wrap {
@@ -553,6 +553,8 @@ button.active {
 .lk-chain { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-bottom: 1px solid #eef2f6; }
 .lk-chain.lk-active { background: #fff7db; border-radius: 6px; }
 .lk-chain .lk-rank { min-width: 34px; color: #fff; border: none; font-weight: 700; font-size: 11px; padding: 3px 6px; }
-.lk-chain .lk-obs { flex: 1; font-family: ui-monospace, monospace; font-size: 11px; color: #2b3440; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lk-chain .lk-obs { flex: 1; font-family: ui-monospace, monospace; font-size: 11px; color: #2b3440; }
 .lk-chain button { padding: 2px 7px; font-size: 12px; }
 .lk-plant { margin: 0 10px; padding: 3px 6px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; font-size: 13px; }
+.lk-width { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.lk-width input { width: 110px; }

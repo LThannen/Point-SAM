@@ -345,17 +345,15 @@ function chainBaseHeight(chain) {
   let base = Infinity;
   for (const [date, leafid] of Object.entries(chain.obs)) {
     const view = state.allViews[date]; if (!view) continue;
-    const positions = view.geometry.attributes.position;
-    for (let i = 0; i < view.leafid.length; i += 1) {
-      if (view.otype[i] === 2 && view.leafid[i] === leafid) base = Math.min(base, positions.getZ(i));
-    }
+    const attachment = view.cloud.attachment_z?.[leafid];
+    if (Number.isFinite(attachment)) base = Math.min(base, attachment);
   }
   return base;
 }
 function renumberByHeight() {
   state.chains.sort((a, b) => chainBaseHeight(a) - chainBaseHeight(b));
   refreshColors(); renderUi();
-  setStatus("Renumbered ranks by leaf height — click Save to keep.");
+  setStatus("Renumbered ranks by stem attachment height — click Save to keep.");
 }
 
 // ---------- load + save ----------
@@ -438,6 +436,7 @@ function ensurePanel() {
           <button data-link-action="zoom-in">+</button>
           <button data-link-action="reset-view">Reset view</button>
           <button data-link-action="renumber-height">↕ Renumber by height</button>
+          <label class="lk-width">Chain panel <input id="link-sidebar-width" type="range" min="280" max="900" step="20" value="340"></label>
           <button class="primary" data-link-action="save">Save</button>
         </div>
       </div>
@@ -471,6 +470,11 @@ function ensurePanel() {
   state.wrap = document.getElementById("link-view-wrap");
   state.labels = document.getElementById("link-date-labels");
   ensureRenderer();
+  const width = document.getElementById("link-sidebar-width");
+  if (width && !width.dataset.wired) {
+    width.dataset.wired = "1";
+    width.addEventListener("input", () => panel.style.setProperty("--link-sidebar-width", `${width.value}px`));
+  }
   state.canvas.addEventListener("click", selectAtEvent);
   state.canvas.addEventListener("wheel", (e) => { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12); }, { passive: false });
   state.canvas.addEventListener("contextmenu", (e) => e.preventDefault());

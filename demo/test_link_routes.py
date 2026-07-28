@@ -8,7 +8,7 @@ import numpy as np
 from flask import Flask
 
 sys.path.insert(0, str(Path(__file__).parent))
-from link_routes import _link_context, register_link_routes  # noqa: E402
+from link_routes import _link_context, leaf_clouds, register_link_routes  # noqa: E402
 
 
 def npy_dict(path):
@@ -16,6 +16,29 @@ def npy_dict(path):
 
 
 class LinkRouteSafetyTest(unittest.TestCase):
+    def test_cloud_attachment_height_uses_nearest_stem_point(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plant_dir = root / "plant_02"
+            plant_dir.mkdir()
+            np.save(
+                plant_dir / "handlabel_02_230606.npy",
+                {
+                    "xyz_local": np.array([
+                        [0, 0, 0], [0, 0, 5], [0, 0, 15],
+                        [0.1, 0, 15], [10, 0, -5],
+                        [0.1, 0, 5], [10, 0, 6],
+                    ]),
+                    "otype": np.array([1, 1, 1, 2, 2, 2, 2]),
+                    "leafid": np.array([0, 0, 0, 1, 1, 2, 2]),
+                },
+            )
+            dataset = SimpleNamespace(leafstem_root=root, dates=("230606",))
+
+            cloud = leaf_clouds(dataset, npy_dict, "02")["230606"]
+
+            self.assertEqual(cloud["attachment_z"], {1: 15.0, 2: 5.0})
+
     def test_noncanonical_seed_and_save_boundaries(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
