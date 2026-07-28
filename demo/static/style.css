@@ -370,6 +370,10 @@ button.active {
     cursor: crosshair;
 }
 
+#link-viewer.dragging {
+    cursor: grabbing;
+}
+
 #link-date-labels {
     position: absolute;
     inset: 0 auto auto 0;

@@ -60,3 +60,25 @@ rankContext.renumberByHeight();
 
 assert.deepEqual(renumberState.chains.map((chain) => chain.obs.d1), [2, 1]);
 assert.match(status, /stem attachment height/);
+
+const cameraSource = source.match(/function zoomBy[\s\S]*?\/\/ ---------- sidebar ----------/)[0]
+  .replace(/\/\/ ---------- sidebar ----------$/, "");
+let fitted = 0;
+let rendered = 0;
+const cameraState = { yaw: 0, pitch: 0, views: [{}, {}] };
+const cameraContext = {
+  state: cameraState,
+  THREE: { MathUtils: { clamp: (value, min, max) => Math.max(min, Math.min(max, value)) } },
+  fitCamera() { fitted += 1; },
+  requestRender() { rendered += 1; },
+};
+vm.runInNewContext(`${cameraSource}; globalThis.rotateBy = rotateBy;`, cameraContext);
+cameraContext.rotateBy(0.2, 0.3);
+
+assert.equal(cameraState.yaw, 0.2);
+assert.equal(cameraState.pitch, 0.3);
+assert.equal(fitted, 2);
+assert.equal(rendered, 1);
+
+cameraContext.rotateBy(0, Math.PI);
+assert.ok(cameraState.pitch < Math.PI / 2);

@@ -24,7 +24,8 @@ const state = {
   chains: [],                 // [{obs:{date:leafid}}], order == rank-1
   pairIndex: 0, leftCursor: 0,
   panel: null, canvas: null, renderer: null, wrap: null, labels: null,
-  views: [], yaw: 0, zoom: 1, renderQueued: false, loadToken: 0, resizeObserver: null,
+  views: [], yaw: 0, pitch: 0, zoom: 1, rotatePointer: null,
+  renderQueued: false, loadToken: 0, resizeObserver: null,
 };
 const scratch = new THREE.Vector3();
 
@@ -135,7 +136,12 @@ function fitCamera(view) {
   cam.left = -halfW; cam.right = halfW; cam.top = halfH; cam.bottom = -halfH;
   cam.near = 0.01; cam.far = b.size * 10 + 1000;
   const dist = b.size * 3 + 10;
-  cam.position.set(b.cx + Math.sin(state.yaw) * dist, b.cy + Math.cos(state.yaw) * dist, b.cz);
+  const horizontal = Math.cos(state.pitch) * dist;
+  cam.position.set(
+    b.cx + Math.sin(state.yaw) * horizontal,
+    b.cy + Math.cos(state.yaw) * horizontal,
+    b.cz + Math.sin(state.pitch) * dist,
+  );
   cam.up.set(0, 0, 1); cam.lookAt(b.cx, b.cy, b.cz); cam.updateProjectionMatrix();
 }
 function layoutViews(width, height) {
@@ -290,8 +296,30 @@ function selectAtEvent(event) {
 
 // ---------- camera controls ----------
 function zoomBy(f) { state.zoom = THREE.MathUtils.clamp(state.zoom * f, 0.35, 8); state.views.forEach(fitCamera); requestRender(); }
-function rotateBy(d) { state.yaw += d; state.views.forEach(fitCamera); requestRender(); }
-function resetView() { state.yaw = 0; state.zoom = 1; state.views.forEach(fitCamera); requestRender(); }
+function rotateBy(yaw, pitch = 0) {
+  state.yaw += yaw;
+  state.pitch = THREE.MathUtils.clamp(state.pitch + pitch, -Math.PI / 2 + 0.05, Math.PI / 2 - 0.05);
+  state.views.forEach(fitCamera); requestRender();
+}
+function startRotate(event) {
+  if (event.button !== 1) return;
+  event.preventDefault();
+  state.rotatePointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+  state.canvas.setPointerCapture(event.pointerId);
+  state.canvas.classList.add("dragging");
+}
+function dragRotate(event) {
+  const drag = state.rotatePointer;
+  if (!drag || drag.id !== event.pointerId) return;
+  rotateBy(-(event.clientX - drag.x) * 0.01, -(event.clientY - drag.y) * 0.01);
+  drag.x = event.clientX; drag.y = event.clientY;
+}
+function stopRotate(event) {
+  if (!state.rotatePointer || state.rotatePointer.id !== event.pointerId) return;
+  state.rotatePointer = null;
+  state.canvas.classList.remove("dragging");
+}
+function resetView() { state.yaw = 0; state.pitch = 0; state.zoom = 1; state.views.forEach(fitCamera); requestRender(); }
 
 // ---------- sidebar ----------
 function renderUi() {
@@ -386,7 +414,7 @@ async function loadData(fresh = false) {
     state.pairIndex = 0; state.leftCursor = 0;
     if (state.dates.length < 2) { setStatus("Need at least two stages with labeled leaves."); state.views = []; renderUi(); return; }
     showPair();
-    setStatus("Left panel: the yellow leaf is the one you're tracking. Click its match in the right panel.");
+    setStatus("Left panel: track the yellow leaf. Click its match on the right; middle-drag either panel to rotate both.");
   } catch (err) {
     if (token === state.loadToken) setStatus(`Link load failed: ${err.message}`);
   } finally { if (token === state.loadToken) setBusy(""); }
@@ -476,6 +504,10 @@ function ensurePanel() {
     width.addEventListener("input", () => panel.style.setProperty("--link-sidebar-width", `${width.value}px`));
   }
   state.canvas.addEventListener("click", selectAtEvent);
+  state.canvas.addEventListener("pointerdown", startRotate);
+  state.canvas.addEventListener("pointermove", dragRotate);
+  state.canvas.addEventListener("pointerup", stopRotate);
+  state.canvas.addEventListener("pointercancel", stopRotate);
   state.canvas.addEventListener("wheel", (e) => { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12); }, { passive: false });
   state.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   const lp = document.getElementById("link-plant");
